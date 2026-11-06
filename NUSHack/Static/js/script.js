@@ -15,6 +15,8 @@ const RECORD_CHECK_MS = 5000;
 const SCROLL_END_MARGIN_PX = 60;
 const MAX_SEPARATE_NOTIFICATIONS = 3;
 const NOTICE_PREVIEW_LENGTH = 120;
+const NOTICE_TAGS = { announcement: "Announcement", reminder: "Reminder", general: "General" };
+const DEFAULT_NOTICE_TAG = "general";
 const NOTIFICATION_DISMISSED_KEY = "bits-notification-prompt-dismissed";
 const MAX_ACTIVITY_ITEMS = 20;
 const MAX_REMEMBERED_READ_MESSAGES = 2000;
@@ -80,6 +82,7 @@ const safetyCheckText = document.getElementById("safety-check-text");
 const noticeForm = document.getElementById("notice-form");
 const noticeInput = document.getElementById("notice-text");
 const noticeError = document.getElementById("notice-error");
+const noticeTagButtons = noticeForm.querySelectorAll("button[data-tag]");
 const checklistForm = document.getElementById("checklist-form");
 const checklistItems = document.getElementById("checklist-items");
 const checklistError = document.getElementById("checklist-error");
@@ -192,6 +195,15 @@ function showList(listId, emptyId, records, createItem) {
 function createNoticeItem(record) {
   const item = createRecordItem(record.data.text, record);
   item.classList.add("notice");
+
+  // Notices posted before tags existed count as General.
+  const tag = record.data.tag || DEFAULT_NOTICE_TAG;
+  item.dataset.tag = tag;
+  const tagLabel = document.createElement("span");
+  tagLabel.className = "notice-tag";
+  tagLabel.textContent = NOTICE_TAGS[tag];
+  item.prepend(tagLabel);
+
   if (record.data.sender_id === currentUserId || currentUserIsAdmin) {
     const button = document.createElement("button");
     button.type = "button";
@@ -200,6 +212,12 @@ function createNoticeItem(record) {
     item.append(button);
   }
   return item;
+}
+
+function selectNoticeTag(tag) {
+  for (const button of noticeTagButtons) {
+    button.setAttribute("aria-pressed", String(button.dataset.tag === tag));
+  }
 }
 
 async function takeDownNotice(noticeId) {
@@ -1099,16 +1117,22 @@ recipientSelect.addEventListener("change", () => {
   }
 });
 
+for (const button of noticeTagButtons) {
+  button.addEventListener("click", () => selectNoticeTag(button.dataset.tag));
+}
+
 noticeForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = noticeInput.value.trim();
   if (!text) {
     return;
   }
+  const tag = noticeForm.querySelector('button[data-tag][aria-pressed="true"]').dataset.tag;
   noticeError.textContent = "";
   try {
-    await saveRecord({ type: "notice", text });
+    await saveRecord({ type: "notice", text, tag });
     noticeForm.reset();
+    selectNoticeTag(DEFAULT_NOTICE_TAG);
   } catch (error) {
     console.warn(error);
     noticeError.textContent = "Couldn't save your notice. Please try again.";

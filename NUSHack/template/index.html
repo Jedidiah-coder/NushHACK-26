@@ -147,6 +147,11 @@
         <form id="notice-form">
           <label for="notice-text">Post a notice</label>
           <textarea id="notice-text" maxlength="1000" rows="3" required></textarea>
+          <div class="notice-tags" role="group" aria-label="Notice tag">
+            <button type="button" id="announcement" data-tag="announcement" aria-pressed="false">Announcement</button>
+            <button type="button" id="reminders" data-tag="reminder" aria-pressed="false">Reminders</button>
+            <button type="button" id="general" data-tag="general" aria-pressed="true">General</button>
+          </div>
           <button type="submit">Post notice</button>
           <p class="form-error" id="notice-error" role="alert"></p>
         </form>

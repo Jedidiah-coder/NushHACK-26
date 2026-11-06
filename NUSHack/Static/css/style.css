@@ -27,6 +27,10 @@
   --sos-surface: #3a1518;
   --sos-border: #e57373;
   --gear: #aeb4bb;
+  --tag-announcement: #c4b5fd;
+  --tag-reminder: #fbbf24;
+  --tag-general: #7dd3fc;
+  --tag-text: #10151c;
 
   --ui-scale: 1;
 }
@@ -87,6 +91,10 @@
   --sos-surface: #fdecec;
   --sos-border: #d32f2f;
   --gear: #626c78;
+  --tag-announcement: #6d28d9;
+  --tag-reminder: #92400e;
+  --tag-general: #0369a1;
+  --tag-text: #ffffff;
 }
 
 /* Sizes, chosen in Settings. */
@@ -580,6 +588,53 @@ ul {
   margin-bottom: 0.5rem;
   padding: 0.5rem;
   font: inherit;
+}
+
+[data-tag="announcement"] {
+  --tag-colour: var(--tag-announcement);
+}
+
+[data-tag="reminder"] {
+  --tag-colour: var(--tag-reminder);
+}
+
+[data-tag="general"] {
+  --tag-colour: var(--tag-general);
+}
+
+.notice-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.notice-tags button {
+  border: 2px solid var(--tag-colour);
+}
+
+.notice-tags button[aria-pressed="true"] {
+  background: var(--tag-colour);
+  color: var(--tag-text);
+  font-weight: 600;
+}
+
+.notice {
+  margin-bottom: 0.5rem;
+  padding-left: 0.75rem;
+  border-left: 4px solid var(--tag-colour);
+}
+
+.notice-tag {
+  display: inline-block;
+  margin-bottom: 0.25rem;
+  padding: 0 0.625rem;
+  border-radius: 999px;
+  background: var(--tag-colour);
+  color: var(--tag-text);
+  font-size: 0.875rem;
+  font-weight: 600;
 }
 
 .notice .record-title {

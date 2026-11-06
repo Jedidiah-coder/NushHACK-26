@@ -38,6 +38,8 @@ MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 72
 MAX_MESSAGE_LENGTH = 500
 MAX_NOTICE_LENGTH = 1000
+NOTICE_TAGS = ("announcement", "reminder", "general")
+DEFAULT_NOTICE_TAG = "general"
 MAX_CHECKLIST_NAME_LENGTH = 100
 MAX_CHECKLIST_TASK_LENGTH = 200
 MAX_CHECKLIST_TASKS = 50
@@ -324,7 +326,10 @@ def prepare_record(data, user):
     if kind == "notice":
         if not text or len(text) > MAX_NOTICE_LENGTH:
             return None, f"Notices must be 1 to {MAX_NOTICE_LENGTH} characters."
-        return {"type": "notice", "text": text}, None
+        tag = data.get("tag", DEFAULT_NOTICE_TAG)
+        if tag not in NOTICE_TAGS:
+            return None, "Choose a valid notice tag."
+        return {"type": "notice", "text": text, "tag": tag}, None
 
     if kind == "message":
         if not text or len(text) > MAX_MESSAGE_LENGTH:
