@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import uuid
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -30,6 +31,10 @@ AUTH_ERRORS = (httpx.HTTPError, AuthError)
 PUBLIC_ENDPOINTS = {"login", "register", "static"}
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 72
+MAX_MESSAGE_LENGTH = 500
+MAX_NOTICE_LENGTH = 1000
+MAX_PULLED_RECORDS = 1000
+MAX_LISTED_USERS = 1000
 SERVICE_UNAVAILABLE = "Can't reach the account service. Check your connection and try again."
 
 SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
@@ -72,11 +77,12 @@ data_lock = threading.Lock()
 
 def load_store():
     if not DATA_FILE.exists():
-        return {"last_logouts": {}, "records": []}
+        return {"last_logouts": {}, "users": {}, "records": []}
     stored = json.loads(DATA_FILE.read_text(encoding="utf-8"))
     # Files from before logouts were tracked hold just a list of records.
     if isinstance(stored, list):
-        return {"last_logouts": {}, "records": stored}
+        return {"last_logouts": {}, "users": {}, "records": stored}
+    stored.setdefault("users", {})
     return stored
 
 
@@ -153,16 +159,24 @@ def sync_pending_records():
     return True
 
 
-def pull_remote_records():
-    """Copy recent records from Supabase into data.json. Supabase wins once synced."""
+def pull_remote_records(user_id):
+    """Copy recent records from Supabase into data.json. Supabase wins once synced.
+
+    Other people's direct messages are left out, so they never reach this device.
+    """
     if supabase is None:
         return
     try:
         rows = (
             supabase.table(SUPABASE_TABLE)
             .select("id,data,created_at")
+            .or_(
+                "data->>recipient_id.is.null,"
+                f"data->>sender_id.eq.{user_id},"
+                f"data->>recipient_id.eq.{user_id}"
+            )
             .order("created_at", desc=True)
-            .limit(200)
+            .limit(MAX_PULLED_RECORDS)
             .execute()
             .data
         )
@@ -185,6 +199,120 @@ def pull_remote_records():
                 changed = True
         if changed:
             save_records(records)
+
+
+def refresh_user_directory():
+    """Return known users, updating the local copy when Supabase is reachable."""
+    directory = None
+    if supabase is not None:
+        try:
+            directory = {
+                user.id: {
+                    "name": (user.user_metadata or {}).get("name") or user.email,
+                    "email": user.email,
+                }
+                for user in supabase.auth.admin.list_users(
+                    page=1, per_page=MAX_LISTED_USERS
+                )
+            }
+        except AUTH_ERRORS as error:
+            app.logger.warning("Could not refresh users: %s", type(error).__name__)
+
+    with data_lock:
+        store = load_store()
+        if directory is not None and directory != store["users"]:
+            store["users"] = directory
+            save_store(store)
+        return store["users"]
+
+
+def find_user(user_id):
+    with data_lock:
+        users = load_store()["users"]
+    if user_id not in users:
+        users = refresh_user_directory()
+    return users.get(user_id)
+
+
+def clean_text(value):
+    return value.strip() if isinstance(value, str) else ""
+
+
+def prepare_record(data, user):
+    """Check a record from the browser. Returns (record data, error message)."""
+    kind = data.get("type")
+    if kind == "checklist":
+        return data, None
+
+    text = clean_text(data.get("text"))
+    if kind == "notice":
+        if not text or len(text) > MAX_NOTICE_LENGTH:
+            return None, f"Notices must be 1 to {MAX_NOTICE_LENGTH} characters."
+        return {"type": "notice", "text": text}, None
+
+    if kind == "message":
+        if not text or len(text) > MAX_MESSAGE_LENGTH:
+            return None, f"Messages must be 1 to {MAX_MESSAGE_LENGTH} characters."
+        recipient_id = data.get("recipient_id")
+        if not isinstance(recipient_id, str) or recipient_id == user["id"]:
+            return None, "Choose someone to message."
+        recipient = find_user(recipient_id)
+        if recipient is None:
+            return None, "Choose someone to message."
+        return {
+            "type": "message",
+            "text": text,
+            "recipient_id": recipient_id,
+            "recipient_name": recipient["name"],
+        }, None
+
+    return None, "Unsupported record type."
+
+
+def save_new_record(data, user):
+    record = {
+        "id": str(uuid.uuid4()),
+        # The sender comes from the session, so a request can't pretend to be someone else.
+        "data": {**data, "sender_id": user["id"], "sender_name": user["name"]},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "synced": False,
+    }
+    # Save locally first, so the record is safe even if the upload fails.
+    with data_lock:
+        records = load_records()
+        records.append(record)
+        save_records(records)
+
+    sync_pending_records()
+
+    with data_lock:
+        return next(r for r in load_records() if r["id"] == record["id"])
+
+
+def find_taken_down_notices(records):
+    """Return the IDs of notices taken down by their own authors."""
+    authors = {
+        record["id"]: record["data"].get("sender_id")
+        for record in records
+        if record["data"].get("type") == "notice"
+    }
+    return {
+        record["data"].get("notice_id")
+        for record in records
+        if record["data"].get("type") == "notice_removal"
+        and authors.get(record["data"].get("notice_id")) == record["data"].get("sender_id")
+    }
+
+
+def is_visible(record, user_id, taken_down):
+    data = record["data"]
+    kind = data.get("type")
+    if kind == "message":
+        recipient_id = data.get("recipient_id")
+        return bool(recipient_id) and user_id in (data.get("sender_id"), recipient_id)
+    if kind == "notice":
+        return record["id"] not in taken_down
+    return kind == "checklist"
 
 
 class AccountError(Exception):
@@ -345,9 +473,38 @@ def status():
 
 @app.route("/api/records")
 def get_records():
-    pull_remote_records()
+    user_id = session["user"]["id"]
+    pull_remote_records(user_id)
     with data_lock:
-        return jsonify(load_records())
+        records = load_records()
+    taken_down = find_taken_down_notices(records)
+    return jsonify([r for r in records if is_visible(r, user_id, taken_down)])
+
+
+@app.route("/api/users")
+def get_users():
+    current_user_id = session["user"]["id"]
+    others = {
+        user_id: user
+        for user_id, user in refresh_user_directory().items()
+        if user_id != current_user_id
+    }
+    # Emails appear only when two people share a name, to tell them apart.
+    name_counts = Counter(user["name"] for user in others.values())
+    return jsonify(
+        sorted(
+            (
+                {
+                    "id": user_id,
+                    "name": user["name"]
+                    if name_counts[user["name"]] == 1
+                    else f"{user['name']} ({user['email']})",
+                }
+                for user_id, user in others.items()
+            ),
+            key=lambda user: user["name"].casefold(),
+        )
+    )
 
 
 @app.route("/api/records", methods=["POST"])
@@ -357,24 +514,34 @@ def create_record():
         return jsonify(error="Send a non-empty JSON object."), 400
 
     user = session["user"]
-    record = {
-        "id": str(uuid.uuid4()),
-        # The sender comes from the session, so a request can't pretend to be someone else.
-        "data": {**data, "sender_id": user["id"], "sender_name": user["name"]},
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "synced": False,
-    }
-    # Save locally first, so the record is safe even if the upload fails.
+    prepared, error = prepare_record(data, user)
+    if error:
+        return jsonify(error=error), 400
+    return jsonify(save_new_record(prepared, user)), 201
+
+
+@app.route("/api/notices/<notice_id>", methods=["DELETE"])
+def take_down_notice(notice_id):
+    user = session["user"]
     with data_lock:
         records = load_records()
-        records.append(record)
-        save_records(records)
+    notice = next(
+        (
+            record
+            for record in records
+            if record["id"] == notice_id and record["data"].get("type") == "notice"
+        ),
+        None,
+    )
+    if notice is None:
+        return jsonify(error="Notice not found."), 404
+    if notice["data"].get("sender_id") != user["id"]:
+        return jsonify(error="Only the author can take down a notice."), 403
 
-    sync_pending_records()
-
-    with data_lock:
-        saved = next(r for r in load_records() if r["id"] == record["id"])
-    return jsonify(saved), 201
+    if notice_id not in find_taken_down_notices(records):
+        # A new record, not an edit, so this works offline and always reaches Supabase.
+        save_new_record({"type": "notice_removal", "notice_id": notice_id}, user)
+    return jsonify(removed=True)
 
 
 @app.route("/api/sync", methods=["POST"])

@@ -95,9 +95,49 @@ ul {
   font-size: 0.875rem;
 }
 
-.message .message-sender {
-  font-size: 0.8125rem;
-  font-weight: 600;
+#panel-home {
+  text-align: center;
+}
+
+.noticeboard {
+  max-width: 600px;
+  margin: 32px auto 0;
+}
+
+.noticeboard label {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.noticeboard textarea {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 8px;
+  font: inherit;
+}
+
+.notice .record-title {
+  white-space: pre-wrap;
+}
+
+.notice button {
+  margin-top: 8px;
+}
+
+.recipient-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.recipient-picker select {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px;
+  font: inherit;
 }
 
 #status[data-state="online"] {
@@ -136,8 +176,8 @@ ul {
 }
 
 .chat {
-  height: calc(100vh - 290px);
-  height: calc(100dvh - 290px);
+  height: calc(100vh - 345px);
+  height: calc(100dvh - 345px);
   min-height: 240px;
   padding: 8px;
   overflow-y: auto;
@@ -148,8 +188,8 @@ ul {
 /* The header can wrap onto two lines on phones, leaving less room for the chat. */
 @media (max-width: 720px) {
   .chat {
-    height: calc(100vh - 345px);
-    height: calc(100dvh - 345px);
+    height: calc(100vh - 400px);
+    height: calc(100dvh - 400px);
   }
 }
 

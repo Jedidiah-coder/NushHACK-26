@@ -10,7 +10,7 @@ const CHECKLIST = {
 };
 const RESULTS = ["Pass", "Fail", "N/A"];
 const STATUS_CHECK_MS = 30000;
-const MESSAGE_CHECK_MS = 5000;
+const RECORD_CHECK_MS = 5000;
 const SCROLL_END_MARGIN_PX = 60;
 
 const tabs = [...document.querySelectorAll(".tab")];
@@ -22,12 +22,21 @@ const messageError = document.getElementById("message-error");
 const messageChat = document.getElementById("message-chat");
 const messageList = document.getElementById("message-list");
 const messagePanel = document.getElementById("panel-message");
+const messageEmpty = document.getElementById("message-empty");
+const messageSend = document.getElementById("message-send");
+const recipientSelect = document.getElementById("message-recipient");
+const noticeForm = document.getElementById("notice-form");
+const noticeInput = document.getElementById("notice-text");
+const noticeError = document.getElementById("notice-error");
 const checklistForm = document.getElementById("checklist-form");
 const checklistItems = document.getElementById("checklist-items");
 const checklistError = document.getElementById("checklist-error");
 
 const currentUserId = document.body.dataset.userId;
+let allMessages = [];
 let renderedMessages = "";
+let renderedUsers = "";
+const renderedLists = {};
 
 async function requestJson(path, options) {
   const response = await fetch(path, options);
@@ -85,9 +94,42 @@ function createRecordItem(titleText, record, details = []) {
   return item;
 }
 
-function showList(listId, emptyId, items) {
-  document.getElementById(listId).replaceChildren(...items);
-  document.getElementById(emptyId).hidden = items.length > 0;
+function showList(listId, emptyId, records, createItem) {
+  // Rebuilding only on a real change keeps focus and any selected text in place.
+  const snapshot = JSON.stringify(records.map((record) => [record.id, record.synced]));
+  if (snapshot === renderedLists[listId]) {
+    return;
+  }
+  renderedLists[listId] = snapshot;
+  document.getElementById(listId).replaceChildren(...records.map(createItem));
+  document.getElementById(emptyId).hidden = records.length > 0;
+}
+
+function createNoticeItem(record) {
+  const item = createRecordItem(record.data.text, record);
+  item.classList.add("notice");
+  if (record.data.sender_id === currentUserId) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Take down";
+    button.addEventListener("click", () => takeDownNotice(record.id));
+    item.append(button);
+  }
+  return item;
+}
+
+async function takeDownNotice(noticeId) {
+  if (!window.confirm("Take down this notice?")) {
+    return;
+  }
+  noticeError.textContent = "";
+  try {
+    await requestJson(`/api/notices/${encodeURIComponent(noticeId)}`, { method: "DELETE" });
+    await Promise.all([refreshRecords(), refreshStatus()]);
+  } catch (error) {
+    console.warn(error);
+    noticeError.textContent = "Couldn't take down the notice. Please try again.";
+  }
 }
 
 function formatDateLabel(date) {
@@ -107,15 +149,8 @@ function createMessageBubble(record) {
   const bubble = document.createElement("li");
   bubble.className = `message ${isSent ? "message-sent" : "message-received"}`;
 
-  if (!isSent && record.data.sender_name) {
-    const sender = document.createElement("p");
-    sender.className = "message-sender";
-    sender.textContent = record.data.sender_name;
-    bubble.append(sender);
-  }
-
   const text = document.createElement("p");
-  text.textContent = record.data.text ?? record.data.note;
+  text.textContent = record.data.text;
 
   const meta = document.createElement("p");
   meta.className = "message-meta";
@@ -138,10 +173,16 @@ function createMessageBubble(record) {
   return bubble;
 }
 
-function renderMessages(messages) {
+function renderMessages() {
+  const personId = recipientSelect.value;
+  const messages = allMessages.filter(
+    (record) => record.data.sender_id === personId || record.data.recipient_id === personId
+  );
+
   // Rebuilding only on a real change keeps any text the officer has selected.
   const snapshot = JSON.stringify([
     new Date().toDateString(),
+    personId,
     messages.map((record) => [record.id, record.synced]),
   ]);
   if (snapshot === renderedMessages) {
@@ -166,7 +207,10 @@ function renderMessages(messages) {
     items.push(createMessageBubble(record));
   }
   messageList.replaceChildren(...items);
-  document.getElementById("message-empty").hidden = messages.length > 0;
+  messageEmpty.hidden = messages.length > 0;
+  messageEmpty.textContent = personId
+    ? "No messages yet. Say hello."
+    : "Select a person to start messaging.";
 
   // Stay put if the officer has scrolled up to read older messages.
   if (distanceFromEnd <= SCROLL_END_MARGIN_PX) {
@@ -186,12 +230,40 @@ async function refreshRecords() {
   const records = await requestJson("/api/records");
   records.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
-  // The "note" check keeps records saved by the first version of the page visible.
-  const messages = records.filter((r) => r.data.type === "message" || r.data.note);
+  allMessages = records.filter((r) => r.data.type === "message");
+  const notices = records.filter((r) => r.data.type === "notice").reverse();
   const inspections = records.filter((r) => r.data.type === "checklist").reverse();
 
-  renderMessages(messages);
-  showList("inspection-list", "inspection-empty", inspections.map(describeInspection));
+  renderMessages();
+  showList("notice-list", "notice-empty", notices, createNoticeItem);
+  showList("inspection-list", "inspection-empty", inspections, describeInspection);
+}
+
+function updateConversation() {
+  const hasPerson = Boolean(recipientSelect.value);
+  messageInput.disabled = !hasPerson;
+  messageSend.disabled = !hasPerson;
+  renderMessages();
+  scrollChatToEnd();
+}
+
+async function refreshUsers() {
+  const users = await requestJson("/api/users");
+  const snapshot = JSON.stringify(users);
+  // Rebuilding only on a real change stops an open dropdown from closing.
+  if (snapshot === renderedUsers) {
+    return;
+  }
+  renderedUsers = snapshot;
+
+  const selected = recipientSelect.value;
+  const placeholder = new Option(users.length ? "Select a person" : "No other users yet", "");
+  recipientSelect.replaceChildren(
+    placeholder,
+    ...users.map((user) => new Option(user.name, user.id))
+  );
+  recipientSelect.value = users.some((user) => user.id === selected) ? selected : "";
+  updateConversation();
 }
 
 function showStatus(state, label, pending) {
@@ -298,15 +370,38 @@ document.getElementById("get-started").addEventListener("click", () => {
   selectTab(document.getElementById("tab-checklist"));
 });
 
+recipientSelect.addEventListener("change", () => {
+  updateConversation();
+  if (recipientSelect.value) {
+    messageInput.focus();
+  }
+});
+
+noticeForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const text = noticeInput.value.trim();
+  if (!text) {
+    return;
+  }
+  noticeError.textContent = "";
+  try {
+    await saveRecord({ type: "notice", text });
+    noticeForm.reset();
+  } catch (error) {
+    console.warn(error);
+    noticeError.textContent = "Couldn't save your notice. Please try again.";
+  }
+});
+
 messageForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = messageInput.value.trim();
-  if (!text) {
+  if (!text || !recipientSelect.value) {
     return;
   }
   messageError.textContent = "";
   try {
-    await saveRecord({ type: "message", text });
+    await saveRecord({ type: "message", text, recipient_id: recipientSelect.value });
     messageForm.reset();
     messageInput.focus();
     scrollChatToEnd();
@@ -337,13 +432,17 @@ checklistForm.addEventListener("submit", async (event) => {
 
 window.addEventListener("online", refreshStatus);
 window.addEventListener("offline", refreshStatus);
-setInterval(refreshStatus, STATUS_CHECK_MS);
 setInterval(() => {
-  if (!messagePanel.hidden && !document.hidden) {
+  refreshStatus();
+  refreshUsers().catch(console.warn);
+}, STATUS_CHECK_MS);
+setInterval(() => {
+  if (!document.hidden) {
     refreshRecords().catch(console.warn);
   }
-}, MESSAGE_CHECK_MS);
+}, RECORD_CHECK_MS);
 
 buildChecklist();
 refreshStatus();
+refreshUsers().catch(console.warn);
 refreshRecords().catch(console.warn);

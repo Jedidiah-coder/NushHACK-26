@@ -22,7 +22,7 @@
   <main>
     <div class="tabs" role="tablist" aria-label="Sections">
       <button class="tab" id="tab-home" type="button" role="tab" aria-controls="panel-home" aria-selected="true">Home</button>
-      <button class="tab" id="tab-message" type="button" role="tab" aria-controls="panel-message" aria-selected="false" tabindex="-1">Message</button>
+      <button class="tab" id="tab-message" type="button" role="tab" aria-controls="panel-message" aria-selected="false" tabindex="-1">Direct Messages</button>
       <button class="tab" id="tab-checklist" type="button" role="tab" aria-controls="panel-checklist" aria-selected="false" tabindex="-1">Checklist</button>
     </div>
 
@@ -30,19 +30,36 @@
       <h1>Welcome to BITS</h1>
       <p>Your all-in-one security assistant for patrols, checkpoints and more.</p>
       <button id="get-started" type="button">Get Started</button>
+
+      <div class="noticeboard" id="noticeboard">
+        <h2>Notice Board</h2>
+        <form id="notice-form">
+          <label for="notice-text">Post a notice</label>
+          <textarea id="notice-text" maxlength="1000" rows="3" required></textarea>
+          <button type="submit">Post notice</button>
+          <p class="form-error" id="notice-error" role="alert"></p>
+        </form>
+        <ul id="notice-list"></ul>
+        <p id="notice-empty">No notices yet.</p>
+      </div>
     </section>
 
     <section id="panel-message" role="tabpanel" aria-labelledby="tab-message" hidden>
-      <h2>Messages</h2>
+      <h2>Direct Messages</h2>
+      <label class="recipient-picker" for="message-recipient">To
+        <select id="message-recipient">
+          <option value="">Select a person</option>
+        </select>
+      </label>
       <div class="chat" id="message-chat" role="log" aria-label="Message history" tabindex="0">
-        <p class="chat-empty" id="message-empty">No messages yet.</p>
+        <p class="chat-empty" id="message-empty">Select a person to start messaging.</p>
         <ul class="chat-messages" id="message-list"></ul>
       </div>
       <form id="message-form">
         <label class="visually-hidden" for="message-text">New message</label>
         <div class="message-row">
-          <input id="message-text" type="text" maxlength="500" autocomplete="off" placeholder="Type a message" required>
-          <button type="submit">Send</button>
+          <input id="message-text" type="text" maxlength="500" autocomplete="off" placeholder="Type a message" required disabled>
+          <button id="message-send" type="submit" disabled>Send</button>
         </div>
         <p class="form-error" id="message-error" role="alert"></p>
       </form>
