@@ -16,6 +16,9 @@ const SCROLL_END_MARGIN_PX = 60;
 const MAX_SEPARATE_NOTIFICATIONS = 3;
 const NOTICE_PREVIEW_LENGTH = 120;
 const NOTIFICATION_DISMISSED_KEY = "bits-notification-prompt-dismissed";
+const MAX_ACTIVITY_ITEMS = 20;
+const MAX_REMEMBERED_READ_MESSAGES = 2000;
+const ACTIVITY_PREVIEW_LENGTH = 80;
 const NOTIFICATIONS_BLOCKED_TEXT =
   "Notifications are blocked. To turn them on, allow them for this site in your browser's settings.";
 
@@ -57,6 +60,12 @@ const messageEmpty = document.getElementById("message-empty");
 const messageSend = document.getElementById("message-send");
 const recipientSelect = document.getElementById("message-recipient");
 const people = document.getElementById("people");
+// A server started before an update still sends the older page, without these.
+const activityButton = document.getElementById("activity-button");
+const activityPanel = document.getElementById("activity-panel");
+const activityBadge = document.getElementById("activity-badge");
+const activityList = document.getElementById("activity-list");
+const activityEmpty = document.getElementById("activity-empty");
 const noticeForm = document.getElementById("notice-form");
 const noticeInput = document.getElementById("notice-text");
 const noticeError = document.getElementById("notice-error");
@@ -76,6 +85,9 @@ let renderedUsers = "";
 let currentChecklist = DEFAULT_CHECKLIST;
 let renderedChecklist = "";
 let seenRecordIds = null;
+let messagesLoaded = false;
+let readMessageIds = null;
+let renderedActivity = "";
 let activeSos = [];
 let renderedSos = "";
 let sosPanelView = null;
@@ -111,6 +123,7 @@ function selectTab(tab) {
   if (accountsPanel && !accountsPanel.hidden) {
     refreshAccounts();
   }
+  updateActivity();
 }
 
 function scrollChatToEnd() {
@@ -443,6 +456,9 @@ function updateNotificationSettings() {
 }
 
 function setSettingsOpen(open) {
+  if (open && activityPanel) {
+    setActivityOpen(false);
+  }
   settingsPanel.hidden = !open;
   settingsButton.setAttribute("aria-expanded", String(open));
   if (open) {
@@ -549,6 +565,8 @@ async function refreshRecords() {
   // Records are sorted oldest first, so the last version is the current one.
   showChecklist(checklistVersions.at(-1)?.data ?? DEFAULT_CHECKLIST);
   renderMessages();
+  messagesLoaded = true;
+  updateActivity();
   showList("notice-list", "notice-empty", notices, createNoticeItem);
   showList("inspection-list", "inspection-empty", inspections, describeInspection);
 }
@@ -563,6 +581,112 @@ function updateConversation() {
   }
   renderMessages();
   scrollChatToEnd();
+  updateActivity();
+}
+
+function loadReadMessages() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(`bits-read-messages-${currentUserId}`));
+    return Array.isArray(saved) ? new Set(saved) : null;
+  } catch (error) {
+    console.warn(error);
+    return null;
+  }
+}
+
+function saveReadMessages() {
+  try {
+    localStorage.setItem(
+      `bits-read-messages-${currentUserId}`,
+      JSON.stringify([...readMessageIds].slice(-MAX_REMEMBERED_READ_MESSAGES))
+    );
+  } catch (error) {
+    console.warn(error);
+  }
+}
+
+function setActivityOpen(open) {
+  activityPanel.hidden = !open;
+  activityButton.setAttribute("aria-expanded", String(open));
+  if (open) {
+    setSettingsOpen(false);
+  }
+}
+
+function createActivityItem(record, isUnread) {
+  const data = record.data;
+  const isSent = data.sender_id === currentUserId;
+  const direction = isSent
+    ? `To ${data.recipient_name ?? "someone"}`
+    : `From ${data.sender_name ?? "someone"}`;
+
+  const heading = document.createElement("span");
+  heading.className = "activity-heading";
+  heading.textContent = isUnread ? `New · ${direction}` : direction;
+  const preview = document.createElement("span");
+  const text = data.text ?? "";
+  preview.textContent =
+    text.length > ACTIVITY_PREVIEW_LENGTH ? `${text.slice(0, ACTIVITY_PREVIEW_LENGTH)}...` : text;
+  const meta = document.createElement("span");
+  meta.className = "record-meta";
+  meta.textContent = `${formatTime(record.created_at)} · ${record.synced ? "Synced" : "Pending upload"}`;
+
+  const button = document.createElement("button");
+  button.className = "activity-item";
+  button.type = "button";
+  button.dataset.unread = String(isUnread);
+  button.append(heading, preview, meta);
+  button.addEventListener("click", () => {
+    setActivityOpen(false);
+    openConversation(isSent ? data.recipient_id : data.sender_id);
+    messageInput.focus();
+  });
+
+  const item = document.createElement("li");
+  item.className = "record";
+  item.append(button);
+  return item;
+}
+
+function updateActivity() {
+  if (!activityButton || !messagesLoaded) {
+    return;
+  }
+  if (readMessageIds === null) {
+    readMessageIds = loadReadMessages();
+    if (readMessageIds === null) {
+      // The first time on this device, older messages don't count as new.
+      readMessageIds = new Set(allMessages.map((record) => record.id));
+      saveReadMessages();
+    }
+  }
+
+  const received = allMessages.filter((record) => record.data.recipient_id === currentUserId);
+  const justRead = received.filter(
+    (record) => !readMessageIds.has(record.id) && isRecordOnScreen(record)
+  );
+  if (justRead.length > 0) {
+    justRead.forEach((record) => readMessageIds.add(record.id));
+    saveReadMessages();
+  }
+
+  const unreadCount = received.filter((record) => !readMessageIds.has(record.id)).length;
+  activityBadge.hidden = unreadCount === 0;
+  activityBadge.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+  const label = unreadCount > 0 ? `Activity, ${unreadCount} unread` : "Activity";
+  activityButton.setAttribute("aria-label", label);
+  activityButton.title = label;
+
+  const recent = allMessages.slice(-MAX_ACTIVITY_ITEMS).reverse();
+  const isUnread = (record) =>
+    record.data.recipient_id === currentUserId && !readMessageIds.has(record.id);
+  // Rebuilding only on a real change keeps the list's scroll position and focus.
+  const snapshot = JSON.stringify(recent.map((r) => [r.id, r.synced, isUnread(r)]));
+  if (snapshot !== renderedActivity) {
+    renderedActivity = snapshot;
+    activityList.replaceChildren(...recent.map((r) => createActivityItem(r, isUnread(r))));
+    activityEmpty.hidden = recent.length > 0;
+  }
 }
 
 function createPeopleGroup(heading, users, emptyText) {
@@ -1133,6 +1257,15 @@ for (const name of ["tone", "size"]) {
     }
   });
 }
+
+activityButton?.addEventListener("click", () => setActivityOpen(activityPanel.hidden));
+document.getElementById("activity-close")?.addEventListener("click", () => {
+  setActivityOpen(false);
+  activityButton.focus();
+});
+// A conversation left open counts as read once someone comes back to it.
+window.addEventListener("focus", updateActivity);
+document.addEventListener("visibilitychange", updateActivity);
 
 settingsButton.addEventListener("click", () => setSettingsOpen(settingsPanel.hidden));
 document.getElementById("settings-close").addEventListener("click", () => {

@@ -328,6 +328,71 @@ ul {
   font-weight: 700;
 }
 
+.activity-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem;
+  color: var(--gear);
+}
+
+.activity-button svg {
+  display: block;
+  width: 1.75rem;
+  height: 1.75rem;
+  fill: currentColor;
+}
+
+.activity-badge {
+  position: absolute;
+  top: -0.375rem;
+  right: -0.375rem;
+  min-width: 1.25rem;
+  padding: 0 0.25rem;
+  border-radius: 0.625rem;
+  background: var(--primary);
+  color: var(--primary-text);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+  text-align: center;
+}
+
+.activity-list {
+  max-height: 20rem;
+  margin: 0.5rem 0 0;
+  overflow-y: auto;
+}
+
+.activity-list .record {
+  padding: 0;
+}
+
+.activity-item {
+  display: block;
+  width: 100%;
+  padding: 0.5rem;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: 0;
+  background: none;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.activity-item span {
+  display: block;
+}
+
+.activity-item[data-unread="true"] {
+  border-left-color: var(--link);
+}
+
+.activity-item[data-unread="true"] .activity-heading {
+  font-weight: 700;
+}
+
 .settings-button {
   display: inline-flex;
   align-items: center;
