@@ -355,6 +355,17 @@ ul {
   font-weight: 700;
 }
 
+/* On its own line under the alert, so it's easy to find in an emergency. */
+.sos-alert .sos-alert-location {
+  flex-basis: 100%;
+  order: 1;
+  font-weight: 400;
+}
+
+#sos-location-update {
+  margin-bottom: 0.5rem;
+}
+
 .activity-button {
   position: relative;
   display: inline-flex;

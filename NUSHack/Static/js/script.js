@@ -30,6 +30,13 @@ const SAFETY_SLEEP_GAP_MS = 3 * 60 * 1000;
 const SAFETY_SOS_RETRY_MS = 30000;
 const SAFETY_ACTIVITY_SAVE_MS = 5000;
 const AUTOMATIC_SOS_REASON = "You didn't respond to 2 safety checks, so SecuriLock sent this for you. ";
+// Each try can take this long, because GPS is slow to start and often weak indoors.
+const SOS_LOCATION_TRY_MS = 10000;
+// Stops "Getting your location" staying up if nobody answers the browser's permission request.
+const SOS_LOCATION_GIVE_UP_MS = 30000;
+const SOS_LOCATION_HELP = "Tell responders where you are.";
+// The browser's error code for this, written out because timeouts here are plain errors with no codes.
+const LOCATION_PERMISSION_DENIED = 1;
 const NOTIFICATIONS_BLOCKED_TEXT =
   "Notifications are blocked. To turn them on, allow them for this site in your browser's settings.";
 const MAP_STATUSES = { unchecked: "Unchecked", safe: "Safe", na: "NA", dangerous: "Dangerous" };
@@ -94,6 +101,9 @@ const sosSend = document.getElementById("sos-send");
 const sosContacts = document.getElementById("sos-contacts");
 const sosClose = document.getElementById("sos-close");
 const sosAlerts = document.getElementById("sos-alerts");
+// A server started before an update still sends the older page, without these.
+const sosLocationText = document.getElementById("sos-location-text");
+const sosLocationUpdate = document.getElementById("sos-location-update");
 const notificationPrompt = document.getElementById("notification-prompt");
 const notificationText = document.getElementById("notification-text");
 const notificationEnable = document.getElementById("notification-enable");
@@ -160,6 +170,9 @@ let safetySosRetryAt = 0;
 let activeSos = [];
 let renderedSos = "";
 let sosPanelView = null;
+let sosLocations = new Map();
+// What this device knows about its own location during an SOS: { status, position, problem }.
+let ownSosLocation = null;
 let mapLevels = DEFAULT_MAP_LEVELS;
 let mapLayoutId = null;
 let mapStatuses = new Map();
@@ -424,9 +437,54 @@ function setUpSosContacts() {
   }
   contactText.textContent = `Emergency number: ${sosPhone}. Calling and texting need a phone.`;
   const dialNumber = sosPhone.replace(/[ ()-]/g, "");
-  const smsBody = encodeURIComponent(`SOS from ${currentUserName}. I need help.`);
+  const position = ownSosLocation?.position;
+  const whereAmI = position ? ` My location: ${createMapLink(position)}` : "";
+  const smsBody = encodeURIComponent(`SOS from ${currentUserName}. I need help.${whereAmI}`);
   document.getElementById("sos-call").href = `tel:${dialNumber}`;
   document.getElementById("sos-sms").href = `sms:${dialNumber}?body=${smsBody}`;
+}
+
+function createMapLink(position) {
+  return `https://www.google.com/maps?q=${position.latitude},${position.longitude}`;
+}
+
+function describePosition(position) {
+  const coordinates = `${position.latitude.toFixed(5)}, ${position.longitude.toFixed(5)}`;
+  return position.accuracy == null ? coordinates : `${coordinates} (within ${position.accuracy} m)`;
+}
+
+function describeOwnSosLocation() {
+  const { status, position, problem } = ownSosLocation;
+  if (status === "locating") {
+    return "Getting your location...";
+  }
+  if (status === "failed") {
+    return problem;
+  }
+  const where = describePosition(position);
+  if (status === "shared") {
+    return `Location shared: ${where}. Everyone with SecuriLock open can see it.`;
+  }
+  if (status === "pending") {
+    return `Location saved on this device: ${where}. It will be shared once you're back online.`;
+  }
+  return `Your location: ${where}. It wasn't shared in SecuriLock, so read it out when you call or text.`;
+}
+
+function renderSosLocation() {
+  if (!sosLocationText) {
+    return;
+  }
+  sosLocationText.hidden = !ownSosLocation;
+  sosLocationText.textContent = ownSosLocation ? describeOwnSosLocation() : "";
+  const hasOwnSos = activeSos.some((record) => record.data.sender_id === currentUserId);
+  sosLocationUpdate.hidden = !hasOwnSos || ownSosLocation?.status === "locating";
+}
+
+function setOwnSosLocation(location) {
+  ownSosLocation = location;
+  setUpSosContacts();
+  renderSosLocation();
 }
 
 function showSosPanelContent(title, text, { confirming = false } = {}) {
@@ -436,6 +494,7 @@ function showSosPanelContent(title, text, { confirming = false } = {}) {
   sosContacts.hidden = confirming;
   sosClose.hidden = confirming;
   sosPanel.hidden = false;
+  renderSosLocation();
 }
 
 function renderSosPanel() {
@@ -446,7 +505,7 @@ function renderSosPanel() {
   if (sosPanelView.name === "confirm") {
     showSosPanelContent(
       "Send an SOS alert?",
-      "Everyone with SecuriLock open will be alerted straight away.",
+      "Everyone with SecuriLock open will be alerted straight away and, if your browser allows it, will see your location.",
       { confirming: true }
     );
     return;
@@ -496,13 +555,68 @@ function createSosAlert(record) {
   button.type = "button";
   button.textContent = "Mark resolved";
   button.addEventListener("click", () => resolveSos(record.id));
-  item.append(text, button);
+  item.append(text, button, createSosAlertLocation(record));
   return item;
+}
+
+function createSosAlertLocation(record) {
+  const line = document.createElement("p");
+  line.className = "sos-alert-location";
+  const location = sosLocations.get(record.id);
+  if (!location) {
+    line.textContent = "No location shared yet.";
+    return line;
+  }
+  const time = new Date(location.created_at).toLocaleTimeString([], { timeStyle: "short" });
+  const link = document.createElement("a");
+  link.href = createMapLink(location.data);
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = "Open in Google Maps";
+  line.append(`Location at ${time}: ${describePosition(location.data)} · `, link);
+  return line;
+}
+
+function findSosLocations(records) {
+  const senders = new Map(activeSos.map((record) => [record.id, record.data.sender_id]));
+  // Records are sorted oldest first, so each SOS keeps its latest location.
+  return new Map(
+    records
+      .filter(
+        ({ data }) =>
+          data.type === "sos_location" &&
+          senders.get(data.sos_id) === data.sender_id &&
+          Number.isFinite(data.latitude) &&
+          Number.isFinite(data.longitude)
+      )
+      .map((record) => [record.data.sos_id, record])
+  );
+}
+
+// Keeps this device's message right after a reload, a sync, or the SOS being resolved.
+function updateOwnSosLocation() {
+  if (ownSosLocation?.status === "locating") {
+    return;
+  }
+  const ownSos = activeSos.find((record) => record.data.sender_id === currentUserId);
+  const saved = ownSos && sosLocations.get(ownSos.id);
+  if (saved) {
+    const status = saved.synced ? "shared" : "pending";
+    if (status !== ownSosLocation?.status || saved.id !== ownSosLocation?.recordId) {
+      setOwnSosLocation({ status, position: saved.data, recordId: saved.id });
+    }
+  } else if (!ownSos && ownSosLocation && sosPanelView === null) {
+    setOwnSosLocation(null);
+  }
 }
 
 function renderSos(records) {
   activeSos = records.filter((record) => record.data.type === "sos").reverse();
-  const snapshot = JSON.stringify(activeSos.map((record) => [record.id, record.synced]));
+  sosLocations = findSosLocations(records);
+  updateOwnSosLocation();
+  const snapshot = JSON.stringify(
+    activeSos.map((record) => [record.id, record.synced, sosLocations.get(record.id)?.id])
+  );
   if (snapshot !== renderedSos) {
     renderedSos = snapshot;
     sosAlerts.replaceChildren(...activeSos.map(createSosAlert));
@@ -523,14 +637,105 @@ async function resolveSos(sosId) {
   }
 }
 
+function requestPosition(options) {
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject, options);
+  });
+}
+
+async function findDevicePosition() {
+  try {
+    return await requestPosition({
+      enableHighAccuracy: true,
+      timeout: SOS_LOCATION_TRY_MS,
+      maximumAge: 30000,
+    });
+  } catch (error) {
+    if (error.code === LOCATION_PERMISSION_DENIED) {
+      throw error;
+    }
+    // Often indoors with no GPS signal, where a rougher position from the network still helps.
+    return requestPosition({
+      enableHighAccuracy: false,
+      timeout: SOS_LOCATION_TRY_MS,
+      maximumAge: 300000,
+    });
+  }
+}
+
+// Never rejects, so waiting for it can't get in the way of the alert.
+async function locateDevice() {
+  if (!window.isSecureContext || !navigator.geolocation) {
+    return { problem: `This connection can't share your location, because it needs HTTPS. ${SOS_LOCATION_HELP}` };
+  }
+  let timer;
+  const giveUp = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error("Timed out finding the location")), SOS_LOCATION_GIVE_UP_MS);
+  });
+  try {
+    const { coords } = await Promise.race([findDevicePosition(), giveUp]);
+    return {
+      position: {
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        accuracy: Number.isFinite(coords.accuracy) ? Math.round(coords.accuracy) : null,
+      },
+    };
+  } catch (error) {
+    console.warn(error);
+    return {
+      problem:
+        error.code === LOCATION_PERMISSION_DENIED
+          ? `Location is blocked for this site, so it wasn't shared. ${SOS_LOCATION_HELP}`
+          : `Couldn't find your location, so it wasn't shared. ${SOS_LOCATION_HELP}`,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function shareSosLocation(sosId, located) {
+  const { position, problem } = await located;
+  if (!position) {
+    setOwnSosLocation({ status: "failed", problem });
+    return;
+  }
+  // No saved SOS to attach it to, but the person can still read it out or text it.
+  if (!sosId) {
+    setOwnSosLocation({ status: "unsent", position });
+    return;
+  }
+  try {
+    const saved = await requestJson(`/api/sos/${encodeURIComponent(sosId)}/location`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(position),
+    });
+    setOwnSosLocation({
+      status: saved.synced ? "shared" : "pending",
+      position: saved.data,
+      recordId: saved.id,
+    });
+    await refreshRecords();
+  } catch (error) {
+    console.warn(error);
+    setOwnSosLocation({ status: "unsent", position });
+  }
+}
+
 async function sendSos({ automatic = false } = {}) {
   sosSend.disabled = true;
+  setOwnSosLocation({ status: "locating" });
+  // Started but not waited for, because a slow or refused location must never delay the alert.
+  const located = locateDevice();
+  let sosId = null;
   try {
     const record = await requestJson("/api/records", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(automatic ? { type: "sos", automatic: true } : { type: "sos" }),
     });
+    sosId = record.id;
     activeSos = [record, ...activeSos];
     sosPanelView = { name: "result", id: record.id };
     renderSosPanel();
@@ -541,6 +746,7 @@ async function sendSos({ automatic = false } = {}) {
   } finally {
     sosSend.disabled = false;
   }
+  shareSosLocation(sosId, located);
   refreshRecords().catch(console.warn);
   refreshStatus();
 }
@@ -592,7 +798,7 @@ function showSafetyCheck(level) {
   safetyCheckText.textContent =
     level < SAFETY_MISSED_CHECKS_FOR_SOS
       ? "You've been inactive for a while. Press I'm OK, or SecuriLock will check again in 5 minutes and then send an SOS."
-      : "Last check. If you don't press I'm OK within 5 minutes, SecuriLock will send an SOS to everyone.";
+      : "Last check. If you don't press I'm OK within 5 minutes, SecuriLock will send an SOS to everyone, with your location if this browser allows it.";
   safetyCheck.scrollIntoView({ block: "nearest" });
   if (notificationsSupported && Notification.permission === "granted") {
     safetyNotification = showNotification(
@@ -1460,6 +1666,13 @@ sosButton.addEventListener("click", () => {
   renderSosPanel();
 });
 sosSend.addEventListener("click", () => sendSos());
+sosLocationUpdate?.addEventListener("click", () => {
+  const ownSos = activeSos.find((record) => record.data.sender_id === currentUserId);
+  if (ownSos) {
+    setOwnSosLocation({ status: "locating" });
+    shareSosLocation(ownSos.id, locateDevice());
+  }
+});
 document.getElementById("sos-cancel").addEventListener("click", () => {
   sosPanelView = null;
   renderSosPanel();

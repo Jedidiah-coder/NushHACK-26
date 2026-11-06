@@ -53,6 +53,7 @@ MIN_MAP_ROOM_HEIGHT = 2
 MAX_MAP_LEVELS = 20
 MAX_MAP_ROOMS_PER_LEVEL = 60
 MAX_MAP_NAME_LENGTH = 40
+MAX_SOS_LOCATION_ACCURACY_METRES = 1000000
 MAX_PULLED_RECORDS = 1000
 MAX_LISTED_USERS = 1000
 ADMIN_ROLE = "admin"
@@ -494,6 +495,29 @@ def save_removal(records, kind, record_id, user):
         )
 
 
+def is_number_between(value, lowest, highest):
+    # Exactly int or float, because Python also counts True and False as ints.
+    return type(value) in (int, float) and lowest <= value <= highest
+
+
+def prepare_sos_location(data):
+    """Check a position from the browser. Returns (position, error message)."""
+    if not isinstance(data, dict):
+        return None, "Send a JSON object."
+    latitude, longitude = data.get("latitude"), data.get("longitude")
+    accuracy = data.get("accuracy")
+    if not is_number_between(latitude, -90, 90) or not is_number_between(longitude, -180, 180):
+        return None, "That location isn't valid."
+    if not is_number_between(accuracy, 0, MAX_SOS_LOCATION_ACCURACY_METRES):
+        # A rough position still helps, so only the accuracy figure is dropped.
+        accuracy = None
+    return {
+        "latitude": round(latitude, 6),
+        "longitude": round(longitude, 6),
+        "accuracy": None if accuracy is None else round(accuracy),
+    }, None
+
+
 def find_resolved_sos(records):
     return {
         record["data"].get("sos_id")
@@ -507,6 +531,9 @@ def is_visible(record, user_id, taken_down, deleted_messages, resolved_sos):
     kind = data.get("type")
     if kind == "sos":
         return record["id"] not in resolved_sos
+    if kind == "sos_location":
+        # Someone's location is only shown while their SOS is open.
+        return data.get("sos_id") not in resolved_sos
     if kind == "message":
         recipient_id = data.get("recipient_id")
         return (
@@ -850,6 +877,25 @@ def resolve_sos(sos_id):
     if sos_id not in find_resolved_sos(records):
         save_new_record({"type": "sos_resolved", "sos_id": sos_id}, session["user"])
     return jsonify(resolved=True)
+
+
+@app.route("/api/sos/<sos_id>/location", methods=["POST"])
+def add_sos_location(sos_id):
+    user = session["user"]
+    with data_lock:
+        records = load_records()
+    sos = find_record(records, sos_id, "sos")
+    if sos is None or sos_id in find_resolved_sos(records):
+        return jsonify(error="SOS not found."), 404
+    # Stops anyone placing someone else's emergency in the wrong place.
+    if sos["data"].get("sender_id") != user["id"]:
+        return jsonify(error="Only the person who sent this SOS can add its location."), 403
+
+    position, error = prepare_sos_location(request.get_json(silent=True))
+    if error:
+        return jsonify(error=error), 400
+    # A new record, not an edit, so this works offline and always reaches Supabase.
+    return jsonify(save_new_record({"type": "sos_location", "sos_id": sos_id, **position}, user)), 201
 
 
 @app.route("/api/notices/<notice_id>", methods=["DELETE"])
