@@ -96,6 +96,33 @@ def sync_pending_records():
     return True
 
 
+def pull_remote_records():
+    """Copy recent records made on other devices from Supabase into data.json."""
+    if supabase is None:
+        return
+    try:
+        rows = (
+            supabase.table(SUPABASE_TABLE)
+            .select("id,data,created_at")
+            .order("created_at", desc=True)
+            .limit(200)
+            .execute()
+            .data
+        )
+    except SUPABASE_ERRORS as error:
+        app.logger.warning("Could not download records: %s", error)
+        return
+
+    with data_lock:
+        records = load_records()
+        known_ids = {record["id"] for record in records}
+        new_records = [
+            {**row, "synced": True} for row in rows if row["id"] not in known_ids
+        ]
+        if new_records:
+            save_records(records + new_records)
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -110,6 +137,7 @@ def status():
 
 @app.route("/api/records")
 def get_records():
+    pull_remote_records()
     with data_lock:
         return jsonify(load_records())
 
@@ -149,4 +177,4 @@ def sync():
 
 if __name__ == "__main__":
     # Debug mode can expose secrets, so it's off unless FLASK_DEBUG=1 is set locally.
-    app.run()
+    app.run(port=8050)

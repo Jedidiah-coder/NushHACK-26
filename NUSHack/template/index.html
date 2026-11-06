@@ -3,24 +3,110 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NushHACK-26</title>
+  <title>BITS</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-  <main>
-    <h1>NushHACK-26</h1>
-    <p id="status" role="status">Checking connection...</p>
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="icon-shield" viewBox="0 0 100 116">
+      <path fill="#c9d8ff" d="M50 2 94 16V54C94 84 74 103 50 114 26 103 6 84 6 54V16Z"/>
+      <path fill="#1650e6" d="M50 13 84 24V54C84 78 68 94 50 103 32 94 16 78 16 54V24Z"/>
+      <path fill="#0b38b4" d="M50 13 84 24V54C84 78 68 94 50 103Z"/>
+      <path fill="#dbe6ff" d="M50 30 55.64 46.23 72.83 46.58 59.13 56.97 64.11 73.42 50 63.6 35.89 73.42 40.87 56.97 27.17 46.58 44.36 46.23Z"/>
+    </symbol>
+    <symbol id="icon-home" viewBox="0 0 24 24">
+      <path fill="currentColor" d="M12 2.5 1.5 12H5v9.5h5.25V15h3.5v6.5H19V12h3.5L18.75 8.6V3.5h-3v2.4Z"/>
+    </symbol>
+    <symbol id="icon-message" viewBox="0 0 24 24">
+      <path fill="currentColor" d="M4.5 2.5h15A3 3 0 0 1 22.500 5.500v10a3 3 0 0 1-3 3h-8L6 22.500v-4H4.500a3 3 0 0 1-3-3v-10a3 3 0 0 1 3-3Z"/>
+      <circle cx="7.500" cy="10.500" r="1.600" fill="#0a1233"/>
+      <circle cx="12" cy="10.500" r="1.600" fill="#0a1233"/>
+      <circle cx="16.500" cy="10.500" r="1.600" fill="#0a1233"/>
+    </symbol>
+    <symbol id="icon-checklist" viewBox="0 0 24 24">
+      <rect x="2" y="2" width="20" height="20" rx="3" fill="currentColor"/>
+      <path fill="none" stroke="#0a1233" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="m6.500 12.500 3.800 3.800 7.200-8.300"/>
+    </symbol>
+    <symbol id="icon-user" viewBox="0 0 24 24">
+      <circle cx="12" cy="7.500" r="5" fill="currentColor"/>
+      <path fill="currentColor" d="M2.500 22c0-5.300 4.300-8 9.500-8s9.500 2.700 9.500 8Z"/>
+    </symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24">
+      <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 12h18m-7-7 7 7-7 7"/>
+    </symbol>
+  </svg>
 
-    <form id="record-form">
-      <label for="note">New note</label>
-      <input id="note" type="text" required>
-      <button type="submit">Save</button>
-    </form>
+  <header class="app-header">
+    <svg class="logo" aria-hidden="true"><use href="#icon-shield"></use></svg>
+    <span class="brand">BITS</span>
+    <span class="tagline">Secure. Monitor. Protect.</span>
+    <div class="header-end">
+      <p class="status-pill" id="status" role="status" data-state="checking">
+        <span class="status-dot"></span>
+        <span id="status-text">Checking...</span>
+      </p>
+      <span class="avatar" role="img" aria-label="Profile">
+        <svg aria-hidden="true"><use href="#icon-user"></use></svg>
+      </span>
+    </div>
+  </header>
 
-    <button id="sync-button" type="button">Sync now</button>
+  <main class="shell">
+    <div class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab" id="tab-home" type="button" role="tab" aria-controls="panel-home" aria-selected="true">
+        <svg aria-hidden="true"><use href="#icon-home"></use></svg>
+        <span>Home</span>
+      </button>
+      <button class="tab" id="tab-message" type="button" role="tab" aria-controls="panel-message" aria-selected="false" tabindex="-1">
+        <svg aria-hidden="true"><use href="#icon-message"></use></svg>
+        <span>Message</span>
+      </button>
+      <button class="tab" id="tab-checklist" type="button" role="tab" aria-controls="panel-checklist" aria-selected="false" tabindex="-1">
+        <svg aria-hidden="true"><use href="#icon-checklist"></use></svg>
+        <span>Checklist</span>
+      </button>
+    </div>
 
-    <h2>Records</h2>
-    <ul id="records"></ul>
+    <section class="panel welcome" id="panel-home" role="tabpanel" aria-labelledby="tab-home">
+      <h1>Welcome to BITS</h1>
+      <p class="welcome-text">Your all-in-one security assistant for patrols, checkpoints and more.</p>
+      <div class="emblem" aria-hidden="true">
+        <span class="emblem-line"></span>
+        <svg><use href="#icon-shield"></use></svg>
+        <span class="emblem-line"></span>
+      </div>
+      <button class="primary-button get-started" id="get-started" type="button">
+        Get Started
+        <svg aria-hidden="true"><use href="#icon-arrow"></use></svg>
+      </button>
+    </section>
+
+    <section class="panel" id="panel-message" role="tabpanel" aria-labelledby="tab-message" hidden>
+      <h2>Messages</h2>
+      <ul class="record-list" id="message-list"></ul>
+      <p class="empty-text" id="message-empty">No messages yet.</p>
+      <form class="message-form" id="message-form">
+        <label for="message-text">New message</label>
+        <div class="message-row">
+          <input id="message-text" type="text" maxlength="500" autocomplete="off" required>
+          <button class="primary-button" type="submit">Send</button>
+        </div>
+        <p class="form-error" id="message-error" role="alert"></p>
+      </form>
+    </section>
+
+    <section class="panel" id="panel-checklist" role="tabpanel" aria-labelledby="tab-checklist" hidden>
+      <h2 id="checklist-title"></h2>
+      <form id="checklist-form">
+        <div id="checklist-items"></div>
+        <p class="form-error" id="checklist-error" role="alert"></p>
+        <button class="primary-button" type="submit">Submit checklist</button>
+      </form>
+      <h2 class="section-heading">Recent inspections</h2>
+      <ul class="record-list" id="inspection-list"></ul>
+      <p class="empty-text" id="inspection-empty">No inspections yet.</p>
+    </section>
   </main>
 
   <script src="{{ url_for('static', filename='js/script.js') }}"></script>
