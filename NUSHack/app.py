@@ -148,4 +148,5 @@ def sync():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    # Debug mode can expose secrets, so it's off unless FLASK_DEBUG=1 is set locally.
+    app.run()
