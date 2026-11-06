@@ -90,6 +90,7 @@ const editorTaskList = document.getElementById("editor-task-list");
 const editorError = document.getElementById("editor-error");
 
 const currentUserId = document.body.dataset.userId;
+const currentUserIsAdmin = document.body.dataset.isAdmin === "true";
 let allMessages = [];
 let renderedMessages = "";
 let renderedUsers = "";
@@ -191,7 +192,7 @@ function showList(listId, emptyId, records, createItem) {
 function createNoticeItem(record) {
   const item = createRecordItem(record.data.text, record);
   item.classList.add("notice");
-  if (record.data.sender_id === currentUserId || currentUserId.rank === "admin") {
+  if (record.data.sender_id === currentUserId || currentUserIsAdmin) {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = "Take down";

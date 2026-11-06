@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <script src="{{ url_for('static', filename='js/appearance.js') }}"></script>
 </head>
-<body data-user-id="{{ user.id }}" data-user-name="{{ user.name }}" data-sos-phone="{{ sos_phone }}">
+<body data-user-id="{{ user.id }}" data-user-name="{{ user.name }}" data-is-admin="{{ user.is_admin|tojson }}" data-sos-phone="{{ sos_phone }}">
   <header class="app-header">
     <img class="brand" src="{{ url_for('static', filename='logo.png') }}" alt="Securilock" width="387" height="320">
     <button class="sos-button" id="sos-button" type="button">SOS</button>
