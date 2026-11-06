@@ -168,6 +168,41 @@ ul {
   background: var(--hover);
 }
 
+.notification-prompt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.notification-prompt p {
+  flex: 1 1 240px;
+  margin: 0;
+}
+
+.notification-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.notification-enable {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-text);
+}
+
+.notification-enable:hover {
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
+}
+
 .auth {
   max-width: 400px;
 }

@@ -13,6 +13,9 @@ const MAX_CHECKLIST_TASKS = 50;
 const STATUS_CHECK_MS = 30000;
 const RECORD_CHECK_MS = 5000;
 const SCROLL_END_MARGIN_PX = 60;
+const MAX_SEPARATE_NOTIFICATIONS = 3;
+const NOTICE_PREVIEW_LENGTH = 120;
+const NOTIFICATION_DISMISSED_KEY = "bits-notification-prompt-dismissed";
 
 const tabs = [...document.querySelectorAll(".tab")];
 const statusElement = document.getElementById("status");
@@ -23,6 +26,11 @@ const messageError = document.getElementById("message-error");
 const messageChat = document.getElementById("message-chat");
 const messageList = document.getElementById("message-list");
 const messagePanel = document.getElementById("panel-message");
+const homePanel = document.getElementById("panel-home");
+const notificationPrompt = document.getElementById("notification-prompt");
+const notificationText = document.getElementById("notification-text");
+const notificationEnable = document.getElementById("notification-enable");
+const notificationDismiss = document.getElementById("notification-dismiss");
 const messageEmpty = document.getElementById("message-empty");
 const messageSend = document.getElementById("message-send");
 const recipientSelect = document.getElementById("message-recipient");
@@ -44,6 +52,8 @@ let renderedMessages = "";
 let renderedUsers = "";
 let currentChecklist = DEFAULT_CHECKLIST;
 let renderedChecklist = "";
+let seenRecordIds = null;
+const notificationsSupported = "Notification" in window && window.isSecureContext;
 const renderedLists = {};
 
 async function requestJson(path, options) {
@@ -234,9 +244,107 @@ function describeInspection(record) {
   return createRecordItem(`${record.data.name}: ${summary}`, record, details);
 }
 
+function wasNotificationPromptDismissed() {
+  try {
+    return sessionStorage.getItem(NOTIFICATION_DISMISSED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function rememberNotificationPromptDismissed() {
+  try {
+    sessionStorage.setItem(NOTIFICATION_DISMISSED_KEY, "true");
+  } catch {
+    // Without storage, the prompt simply returns on the next page load.
+  }
+}
+
+function updateNotificationPrompt() {
+  notificationPrompt.hidden =
+    !notificationsSupported ||
+    Notification.permission !== "default" ||
+    wasNotificationPromptDismissed();
+}
+
+function showNotification(title, body, tag, openRecord) {
+  try {
+    const notification = new Notification(title, {
+      body,
+      tag,
+      icon: "/static/favicon.svg",
+    });
+    notification.onclick = () => {
+      window.focus();
+      openRecord();
+      notification.close();
+    };
+  } catch (error) {
+    // Some mobile browsers don't allow notifications to be created this way.
+    console.warn(error);
+  }
+}
+
+function openConversation(senderId) {
+  recipientSelect.value = senderId;
+  selectTab(document.getElementById("tab-message"));
+  updateConversation();
+}
+
+function announceRecord(record) {
+  const sender = record.data.sender_name ?? "Someone";
+  if (record.data.type === "message") {
+    // Message text stays out of the alert, so it can't show on a locked or shared screen.
+    showNotification(`New message from ${sender}`, "Open BITS to read it.", record.id, () =>
+      openConversation(record.data.sender_id)
+    );
+    return;
+  }
+  const text = record.data.text;
+  const preview =
+    text.length > NOTICE_PREVIEW_LENGTH ? `${text.slice(0, NOTICE_PREVIEW_LENGTH)}...` : text;
+  showNotification(`New notice from ${sender}`, preview, record.id, () =>
+    selectTab(document.getElementById("tab-home"))
+  );
+}
+
+function isRecordOnScreen(record) {
+  if (document.hidden || !document.hasFocus()) {
+    return false;
+  }
+  return record.data.type === "notice"
+    ? !homePanel.hidden
+    : !messagePanel.hidden && recipientSelect.value === record.data.sender_id;
+}
+
+function notifyAboutNewRecords(records) {
+  const incoming = records.filter(
+    (record) =>
+      record.data.sender_id !== currentUserId &&
+      (record.data.type === "notice" ||
+        (record.data.type === "message" && record.data.recipient_id === currentUserId))
+  );
+
+  // The first load only records what already exists, so old items never trigger alerts.
+  const isFirstLoad = seenRecordIds === null;
+  const unseen = isFirstLoad ? [] : incoming.filter((record) => !seenRecordIds.has(record.id));
+  seenRecordIds = new Set([...(seenRecordIds ?? []), ...incoming.map((record) => record.id)]);
+
+  if (!notificationsSupported || Notification.permission !== "granted") {
+    return;
+  }
+  const toAnnounce = unseen.filter((record) => !isRecordOnScreen(record));
+  if (toAnnounce.length > MAX_SEPARATE_NOTIFICATIONS) {
+    showNotification(`${toAnnounce.length} new updates`, "Open BITS to see them.", "bits-summary", () => {});
+    return;
+  }
+  toAnnounce.forEach(announceRecord);
+}
+
 async function refreshRecords() {
   const records = await requestJson("/api/records");
   records.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  notifyAboutNewRecords(records);
 
   allMessages = records.filter((r) => r.data.type === "message");
   const notices = records.filter((r) => r.data.type === "notice").reverse();
@@ -521,6 +629,23 @@ checklistForm.addEventListener("submit", async (event) => {
   }
 });
 
+notificationEnable.addEventListener("click", async () => {
+  const permission = await Notification.requestPermission();
+  if (permission === "denied") {
+    notificationText.textContent =
+      "Notifications are blocked. To turn them on, allow them for this site in your browser's settings.";
+    notificationEnable.hidden = true;
+    notificationDismiss.textContent = "OK";
+    return;
+  }
+  updateNotificationPrompt();
+});
+
+notificationDismiss.addEventListener("click", () => {
+  rememberNotificationPromptDismissed();
+  notificationPrompt.hidden = true;
+});
+
 checklistEditButton.addEventListener("click", openChecklistEditor);
 document.getElementById("editor-cancel").addEventListener("click", closeChecklistEditor);
 document.getElementById("editor-add-task").addEventListener("click", () => {
@@ -564,11 +689,14 @@ setInterval(() => {
   refreshUsers().catch(console.warn);
 }, STATUS_CHECK_MS);
 setInterval(() => {
-  if (!document.hidden) {
+  // With notifications on, keep checking from a background tab so alerts can arrive.
+  const wantsAlerts = notificationsSupported && Notification.permission === "granted";
+  if (!document.hidden || wantsAlerts) {
     refreshRecords().catch(console.warn);
   }
 }, RECORD_CHECK_MS);
 
+updateNotificationPrompt();
 showChecklist(DEFAULT_CHECKLIST);
 refreshStatus();
 refreshUsers().catch(console.warn);
