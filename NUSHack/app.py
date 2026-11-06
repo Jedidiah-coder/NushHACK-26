@@ -33,16 +33,7 @@ DATA_FILE = BASE_DIR / "data.json"
 SUPABASE_TABLE = "records"
 SUPABASE_ERRORS = (httpx.HTTPError, APIError)
 AUTH_ERRORS = (httpx.HTTPError, AuthError)
-PUBLIC_ENDPOINTS = {"login", "login_code", "resend_login_code", "static"}
-EMAIL_PATTERN = r"[^@\s]+@[^@\s]+\.[^@\s]+"
-# Set on new accounts until their owner enters a code emailed to them.
-EMAIL_PENDING_KEY = "email_pending"
-# Must match Email OTP Length in the Supabase project's settings.
-LOGIN_CODE_PATTERN = r"[0-9]{6}"
-LOGIN_CODE_WINDOW = timedelta(minutes=10)
-MAX_LOGIN_CODE_ATTEMPTS = 5
-WRONG_LOGIN_CODE = "That code is wrong or has expired."
-TOO_MANY_LOGIN_EMAILS = "Too many login emails were sent. Wait a few minutes and try again."
+PUBLIC_ENDPOINTS = {"login", "static"}
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 72
 MAX_MESSAGE_LENGTH = 500
@@ -103,10 +94,6 @@ supabase = (
 
 # Flask handles requests on several threads, so JSON file access takes turns.
 data_lock = threading.Lock()
-
-# Counted on the server, because a browser could resend an older session cookie to reset a count.
-login_code_attempts = Counter()
-login_code_lock = threading.Lock()
 
 
 def load_store():
@@ -250,12 +237,7 @@ def load_directory(checking_in_user_id=None):
                     checking_in_user_id,
                     {"app_metadata": {LAST_SEEN_KEY: datetime.now(timezone.utc).isoformat()}},
                 )
-            # Accounts that haven't confirmed their email can't be messaged yet.
-            listed = [
-                user
-                for user in supabase.auth.admin.list_users(page=1, per_page=MAX_LISTED_USERS)
-                if not is_email_pending(user)
-            ]
+            listed = supabase.auth.admin.list_users(page=1, per_page=MAX_LISTED_USERS)
             directory = {
                 user.id: {
                     "name": (user.user_metadata or {}).get("name") or user.email,
@@ -461,21 +443,9 @@ class AccountError(Exception):
     """An account or log-in problem, with a message that's safe to show the user."""
 
 
-class WrongLoginCode(AccountError):
-    """The login code didn't match, or it has expired."""
-
-
-class LoginRestartNeeded(AccountError):
-    """The login code step has to start again from the password."""
-
-
 def is_admin_account(user):
     # app_metadata, because people can edit their own user_metadata.
     return (user.app_metadata or {}).get("role") == ADMIN_ROLE
-
-
-def is_email_pending(user):
-    return bool((user.app_metadata or {}).get(EMAIL_PENDING_KEY))
 
 
 def create_account(name, email, password, rank=MEMBER_ROLE):
@@ -484,13 +454,11 @@ def create_account(name, email, password, rank=MEMBER_ROLE):
     attributes = {
         "email": email,
         "password": password,
-        # Tells Supabase not to run its own sign-up emails. EMAIL_PENDING_KEY tracks the real proof.
         "email_confirm": True,
         "user_metadata": {"name": name},
-        "app_metadata": {EMAIL_PENDING_KEY: True},
     }
     if rank == ADMIN_ROLE:
-        attributes["app_metadata"]["role"] = ADMIN_ROLE
+        attributes["app_metadata"] = {"role": ADMIN_ROLE}
     try:
         return supabase.auth.admin.create_user(attributes).user
     except AUTH_ERRORS as error:
@@ -530,33 +498,17 @@ def update_account(user_id, attributes):
         raise AccountError(SERVICE_UNAVAILABLE) from error
 
 
-def remove_account(user_id):
-    try:
-        supabase.auth.admin.delete_user(user_id)
-    except AUTH_ERRORS as error:
-        app.logger.warning("Account removal failed: %s", type(error).__name__)
-        raise AccountError(SERVICE_UNAVAILABLE) from error
-
-
-def new_auth_client():
-    # Signing in changes a client's credentials, so this must not use the shared client.
-    return create_client(
-        SUPABASE_URL,
-        SUPABASE_KEY,
-        options=ClientOptions(
-            auto_refresh_token=False,
-            persist_session=False,
-            # Each login step uses a new client, so nothing could keep a PKCE verifier between them.
-            flow_type="implicit",
-        ),
-    )
-
-
 def verify_login(email, password):
     if supabase is None:
         raise AccountError(SERVICE_UNAVAILABLE)
+    # Signing in changes a client's credentials, so this must not use the shared client.
+    client = create_client(
+        SUPABASE_URL,
+        SUPABASE_KEY,
+        options=ClientOptions(auto_refresh_token=False, persist_session=False),
+    )
     try:
-        return new_auth_client().auth.sign_in_with_password(
+        return client.auth.sign_in_with_password(
             {"email": email, "password": password}
         ).user
     except AUTH_ERRORS as error:
@@ -565,86 +517,6 @@ def verify_login(email, password):
         if code == "invalid_credentials":
             raise AccountError("Incorrect email or password.") from error
         raise AccountError(SERVICE_UNAVAILABLE) from error
-
-
-def send_login_code(user_id, email):
-    try:
-        new_auth_client().auth.sign_in_with_otp(
-            {"email": email, "options": {"should_create_user": False}}
-        )
-    except AUTH_ERRORS as error:
-        code = getattr(error, "code", None)
-        app.logger.warning("Login code not sent: %s %s", type(error).__name__, code)
-        if code is None:
-            raise AccountError(SERVICE_UNAVAILABLE) from error
-        if code.startswith("over_"):
-            raise AccountError(TOO_MANY_LOGIN_EMAILS) from error
-        raise AccountError("Couldn't send your login code. Ask your admin for help.") from error
-    # A new code replaces the old one, so its attempts start again.
-    with login_code_lock:
-        login_code_attempts.pop(user_id, None)
-
-
-def begin_code_step(user):
-    send_login_code(user.id, user.email)
-    session.clear()
-    session["pending_login"] = {
-        "user_id": user.id,
-        "email": user.email,
-        # Fixed here and kept when a new code is sent, so the password has to be recent.
-        "expires_at": (datetime.now(timezone.utc) + LOGIN_CODE_WINDOW).timestamp(),
-    }
-
-
-def read_pending_login():
-    pending = session.get("pending_login")
-    if pending and datetime.now(timezone.utc).timestamp() < pending["expires_at"]:
-        return pending
-    session.pop("pending_login", None)
-    return None
-
-
-def verify_login_code(email, code):
-    try:
-        user = new_auth_client().auth.verify_otp(
-            {"email": email, "token": code, "type": "email"}
-        ).user
-    except AUTH_ERRORS as error:
-        reason = getattr(error, "code", None)
-        app.logger.warning("Login code rejected: %s %s", type(error).__name__, reason)
-        if reason == "otp_expired":
-            raise WrongLoginCode(WRONG_LOGIN_CODE) from error
-        raise AccountError(SERVICE_UNAVAILABLE) from error
-    if user is None:
-        raise AccountError(SERVICE_UNAVAILABLE)
-    return user
-
-
-def finish_login(pending, entered_code):
-    code = "".join(entered_code.split())
-    if not re.fullmatch(LOGIN_CODE_PATTERN, code):
-        raise AccountError(WRONG_LOGIN_CODE)
-
-    user_id = pending["user_id"]
-    # Counted before checking, so requests sent all at once can't get extra guesses.
-    with login_code_lock:
-        login_code_attempts[user_id] += 1
-        attempts = login_code_attempts[user_id]
-    restart_message = "Too many wrong codes. Log in again to get a new one."
-    if attempts > MAX_LOGIN_CODE_ATTEMPTS:
-        raise LoginRestartNeeded(restart_message)
-    try:
-        user = verify_login_code(pending["email"], code)
-    except WrongLoginCode as error:
-        if attempts == MAX_LOGIN_CODE_ATTEMPTS:
-            raise LoginRestartNeeded(restart_message) from error
-        raise
-
-    if is_email_pending(user):
-        update_account(user.id, {"app_metadata": {EMAIL_PENDING_KEY: None}})
-    with login_code_lock:
-        login_code_attempts.pop(user_id, None)
-    start_session(user)
 
 
 def start_session(user):
@@ -671,7 +543,7 @@ def find_password_problem(password):
 def find_account_problem(name, email, password):
     if not name or len(name) > 100:
         return "Enter a name (up to 100 characters)."
-    if not re.fullmatch(EMAIL_PATTERN, email) or len(email) > 254:
+    if "@" not in email or len(email) > 254:
         return "Enter a valid email address."
     return find_password_problem(password)
 
@@ -714,58 +586,13 @@ def login():
     error = None
     if request.method == "POST":
         try:
-            begin_code_step(verify_login(email, request.form.get("password", "")))
-            return redirect(url_for("login_code"))
+            start_session(verify_login(email, request.form.get("password", "")))
+            return redirect(url_for("index"))
         except AccountError as account_error:
             error = str(account_error)
 
     status = 400 if error else 200
     return render_template("auth.html", email=email, error=error), status
-
-
-@app.route("/login/code", methods=["GET", "POST"])
-def login_code():
-    if "user" in session:
-        return redirect(url_for("index"))
-    pending = read_pending_login()
-    if pending is None:
-        return redirect(url_for("login"))
-
-    error = None
-    if request.method == "POST":
-        try:
-            finish_login(pending, request.form.get("code", ""))
-            return redirect(url_for("index"))
-        except LoginRestartNeeded as restart:
-            session.pop("pending_login", None)
-            return render_template("auth.html", email=pending["email"], error=str(restart)), 429
-        except AccountError as account_error:
-            error = str(account_error)
-
-    status = 400 if error else 200
-    return render_template("auth.html", code_email=pending["email"], error=error), status
-
-
-@app.route("/login/code/resend", methods=["POST"])
-def resend_login_code():
-    if "user" in session:
-        return redirect(url_for("index"))
-    pending = read_pending_login()
-    if pending is None:
-        return redirect(url_for("login"))
-
-    notice = error = None
-    try:
-        send_login_code(pending["user_id"], pending["email"])
-        notice = "We've sent a new code. It replaces the last one."
-    except AccountError as account_error:
-        error = str(account_error)
-
-    status = 400 if error else 200
-    return (
-        render_template("auth.html", code_email=pending["email"], error=error, notice=notice),
-        status,
-    )
 
 
 @app.route("/logout", methods=["POST"])
@@ -853,16 +680,9 @@ def describe_account(user):
     """Return what admins see. Other admins' login emails are left out."""
     is_admin = is_admin_account(user)
     name = (user.user_metadata or {}).get("name")
-    pending = is_email_pending(user)
     if is_admin:
-        return {"id": user.id, "name": name or "Unnamed admin", "rank": ADMIN_ROLE, "pending": pending}
-    return {
-        "id": user.id,
-        "name": name or user.email,
-        "email": user.email,
-        "rank": MEMBER_ROLE,
-        "pending": pending,
-    }
+        return {"id": user.id, "name": name or "Unnamed admin", "rank": ADMIN_ROLE}
+    return {"id": user.id, "name": name or user.email, "email": user.email, "rank": MEMBER_ROLE}
 
 
 @app.route("/api/accounts")
@@ -892,19 +712,6 @@ def grant_account():
         return jsonify(error=problem), 400
     create_account(name, email, password, rank)
     return jsonify(name=name, email=email, rank=rank), 201
-
-
-@app.route("/api/accounts/<user_id>", methods=["DELETE"])
-@admin_only
-def remove_unconfirmed_account(user_id):
-    # Lets an admin fix a mistyped email. Accounts in use can't be removed here.
-    account = find_account(user_id)
-    if account is None:
-        return jsonify(error="Account not found."), 404
-    if not is_email_pending(account):
-        return jsonify(error="Only accounts waiting for email confirmation can be removed."), 403
-    remove_account(user_id)
-    return jsonify(removed=True)
 
 
 @app.route("/api/accounts/<user_id>/admin", methods=["POST"])
@@ -1028,9 +835,7 @@ def create_admin():
         raise click.ClickException(str(error)) from error
     except AUTH_ERRORS as error:
         raise click.ClickException(SERVICE_UNAVAILABLE) from error
-    click.echo(
-        f"{email} is now an admin. Log in with a code sent to that address to see the Accounts tab."
-    )
+    click.echo(f"{email} is now an admin. Log out and back in to see the Accounts tab.")
 
 
 if __name__ == "__main__":

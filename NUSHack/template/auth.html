@@ -14,31 +14,12 @@
   </header>
 
   <main class="auth">
-    <h1>{{ "Enter your code" if code_email else "Log in" }}</h1>
+    <h1>Log in</h1>
 
     {% if error %}
     <p class="form-error" id="auth-error" role="alert">{{ error }}</p>
     {% endif %}
-    {% if notice %}
-    <p role="status">{{ notice }}</p>
-    {% endif %}
 
-    {% if code_email %}
-    <p>We emailed a 6-digit login code to {{ code_email }}. Check your spam folder if it doesn't arrive.</p>
-
-    <form id="auth-form" method="post" action="{{ url_for('login_code') }}">
-      <label for="code">6-digit code</label>
-      <input id="code" name="code" type="text" inputmode="numeric" maxlength="12" autocomplete="one-time-code" required autofocus>
-
-      <button type="submit">Continue</button>
-    </form>
-
-    <form method="post" action="{{ url_for('resend_login_code') }}">
-      <button type="submit">Send a new code</button>
-    </form>
-
-    <p><a href="{{ url_for('login') }}">Back to log in</a></p>
-    {% else %}
     <form id="auth-form" method="post">
       <label for="email">Email</label>
       <input id="email" name="email" type="email" value="{{ email }}" maxlength="254" autocomplete="email" required>
@@ -50,7 +31,6 @@
     </form>
 
     <p>Need an account? Ask your admin.</p>
-    {% endif %}
   </main>
 </body>
 </html>
