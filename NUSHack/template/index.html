@@ -10,7 +10,7 @@
 </head>
 <body data-user-id="{{ user.id }}" data-user-name="{{ user.name }}" data-is-admin="{{ user.is_admin|tojson }}" data-sos-phone="{{ sos_phone }}">
   <header class="app-header">
-    <img class="brand" src="{{ url_for('static', filename='logo.png') }}" alt="Securilock" width="387" height="320">
+    <img class="brand" src="{{ url_for('static', filename='logo.png') }}" alt="SecuriLock logo" width="387" height="320">
     <button class="sos-button" id="sos-button" type="button">SOS</button>
     <p id="status" role="status" data-state="checking">
       <span id="status-text">Checking...</span>
@@ -73,7 +73,8 @@
       <h3>Account</h3>
       <p>Name: {{ user.name }}</p>
       <p>Email: {{ user.email }}</p>
-      <p>Rank: {{ "Admin" if user.is_admin else "Member" }}</p>
+      <p>Rank: {{ "Admin" if user.is_admin else "Member" }}</p> {% endif %}
+      <!-- jinja to fill in the user details -->
     </div>
 
     <div class="settings-section">
@@ -143,6 +144,7 @@
 
     <section id="panel-home" role="tabpanel" aria-labelledby="tab-home">
       <div class="noticeboard" id="noticeboard">
+        <!--Notice board code (default msgs, the categories, etc.)-->
         <h1>Notice Board</h1>
         <form id="notice-form">
           <label for="notice-text">Post a notice</label>
