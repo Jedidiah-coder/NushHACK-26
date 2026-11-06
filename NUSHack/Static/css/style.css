@@ -512,6 +512,52 @@ ul {
   margin-top: 0.5rem;
 }
 
+.people {
+  max-height: 9.5rem;
+  margin-bottom: 0.5rem;
+  overflow-y: auto;
+}
+
+.people h3 {
+  margin: 0.25rem 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.people ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  margin: 0;
+}
+
+.person {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 100%;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.person[aria-pressed="true"] {
+  border-color: var(--link);
+  font-weight: 600;
+}
+
+.person-dot {
+  flex: none;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background: var(--gear);
+}
+
+.person[data-status="online"] .person-dot {
+  background: var(--online);
+}
+
 .recipient-picker {
   display: flex;
   align-items: center;
@@ -577,8 +623,8 @@ ul {
 }
 
 .chat {
-  height: calc(100vh - 21.5625rem);
-  height: calc(100dvh - 21.5625rem);
+  height: calc(100vh - 28.5rem);
+  height: calc(100dvh - 28.5rem);
   min-height: 15rem;
   padding: 0.5rem;
   overflow-y: auto;
@@ -590,8 +636,8 @@ ul {
 /* The header can wrap onto two lines on phones, leaving less room for the chat. */
 @media (max-width: 720px) {
   .chat {
-    height: calc(100vh - 25rem);
-    height: calc(100dvh - 25rem);
+    height: calc(100vh - 32rem);
+    height: calc(100dvh - 32rem);
   }
 }
 

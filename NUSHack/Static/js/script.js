@@ -56,6 +56,7 @@ const settingsNotificationEnable = document.getElementById("settings-notificatio
 const messageEmpty = document.getElementById("message-empty");
 const messageSend = document.getElementById("message-send");
 const recipientSelect = document.getElementById("message-recipient");
+const people = document.getElementById("people");
 const noticeForm = document.getElementById("notice-form");
 const noticeInput = document.getElementById("notice-text");
 const noticeError = document.getElementById("notice-error");
@@ -556,8 +557,62 @@ function updateConversation() {
   const hasPerson = Boolean(recipientSelect.value);
   messageInput.disabled = !hasPerson;
   messageSend.disabled = !hasPerson;
+  for (const button of people.querySelectorAll("button")) {
+    button.setAttribute("aria-pressed", String(button.dataset.userId === recipientSelect.value));
+  }
   renderMessages();
   scrollChatToEnd();
+}
+
+function createPeopleGroup(heading, users, emptyText) {
+  const title = document.createElement("h3");
+  title.textContent = heading;
+  if (users.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "field-hint";
+    empty.textContent = emptyText;
+    return [title, empty];
+  }
+
+  const list = document.createElement("ul");
+  for (const user of users) {
+    const button = document.createElement("button");
+    button.className = "person";
+    button.type = "button";
+    button.dataset.userId = user.id;
+    button.dataset.status = user.status;
+    const dot = document.createElement("span");
+    dot.className = "person-dot";
+    button.append(dot, user.name);
+    button.addEventListener("click", () => {
+      recipientSelect.value = user.id;
+      recipientSelect.dispatchEvent(new Event("change"));
+    });
+    const item = document.createElement("li");
+    item.append(button);
+    list.append(item);
+  }
+  return [title, list];
+}
+
+function renderPeople(users) {
+  people.hidden = users.length === 0;
+  if (users.some((user) => user.status === "unknown")) {
+    people.replaceChildren(
+      ...createPeopleGroup("People", users, ""),
+      Object.assign(document.createElement("p"), {
+        className: "field-hint",
+        textContent: "You're offline, so BITS can't check who else is online.",
+      })
+    );
+    return;
+  }
+  const online = users.filter((user) => user.status === "online");
+  const offline = users.filter((user) => user.status === "offline");
+  people.replaceChildren(
+    ...createPeopleGroup(`Online (${online.length})`, online, "No one else is online right now."),
+    ...createPeopleGroup(`Offline (${offline.length})`, offline, "Everyone else is online.")
+  );
 }
 
 async function refreshUsers() {
@@ -568,6 +623,7 @@ async function refreshUsers() {
     return;
   }
   renderedUsers = snapshot;
+  renderPeople(users);
 
   const selected = recipientSelect.value;
   const placeholder = new Option(users.length ? "Select a person" : "No other users yet", "");

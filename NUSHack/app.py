@@ -45,6 +45,9 @@ MAX_PULLED_RECORDS = 1000
 MAX_LISTED_USERS = 1000
 ADMIN_ROLE = "admin"
 MEMBER_ROLE = "member"
+LAST_SEEN_KEY = "last_seen"
+# Open pages check in every 30 seconds, but browsers slow background tabs to once a minute.
+ONLINE_WINDOW = timedelta(minutes=2)
 SERVICE_UNAVAILABLE = "Can't reach the account service. Check your connection and try again."
 
 SOS_PHONE_NUMBER = os.getenv("SOS_PHONE_NUMBER", "").strip()
@@ -215,19 +218,31 @@ def pull_remote_records(user_id):
             save_records(records)
 
 
-def refresh_user_directory():
-    """Return known users, updating the local copy when Supabase is reachable."""
+def load_directory(checking_in_user_id=None):
+    """Return (known users, last check-ins), updating the local copy when Supabase is reachable.
+
+    Check-ins are None when Supabase can't be reached, because nobody's status is known then.
+    """
     directory = None
+    check_ins = None
     if supabase is not None:
         try:
+            if checking_in_user_id:
+                # Added to the account's app_metadata. Supabase keeps the other keys, such as role.
+                supabase.auth.admin.update_user_by_id(
+                    checking_in_user_id,
+                    {"app_metadata": {LAST_SEEN_KEY: datetime.now(timezone.utc).isoformat()}},
+                )
+            listed = supabase.auth.admin.list_users(page=1, per_page=MAX_LISTED_USERS)
             directory = {
                 user.id: {
                     "name": (user.user_metadata or {}).get("name") or user.email,
                     "email": user.email,
                 }
-                for user in supabase.auth.admin.list_users(
-                    page=1, per_page=MAX_LISTED_USERS
-                )
+                for user in listed
+            }
+            check_ins = {
+                user.id: (user.app_metadata or {}).get(LAST_SEEN_KEY) for user in listed
             }
         except AUTH_ERRORS as error:
             app.logger.warning("Could not refresh users: %s", type(error).__name__)
@@ -237,7 +252,26 @@ def refresh_user_directory():
         if directory is not None and directory != store["users"]:
             store["users"] = directory
             save_store(store)
-        return store["users"]
+        return store["users"], check_ins
+
+
+def refresh_user_directory():
+    return load_directory()[0]
+
+
+def is_recent_check_in(last_seen):
+    try:
+        return datetime.now(timezone.utc) - datetime.fromisoformat(last_seen) < ONLINE_WINDOW
+    except (TypeError, ValueError):
+        return False
+
+
+def clear_check_in(user_id):
+    """Show someone as offline straight away. If this fails, their check-in just goes stale."""
+    try:
+        supabase.auth.admin.update_user_by_id(user_id, {"app_metadata": {LAST_SEEN_KEY: None}})
+    except AUTH_ERRORS as error:
+        app.logger.warning("Could not clear check-in: %s", type(error).__name__)
 
 
 def find_user(user_id):
@@ -517,6 +551,7 @@ def logout():
     if online:
         # Sync first, so waiting records still use the permission from the last logout.
         sync_pending_records()
+        clear_check_in(session["user"]["id"])
 
     with data_lock:
         store = load_store()
@@ -563,11 +598,14 @@ def get_records():
 @app.route("/api/users")
 def get_users():
     current_user_id = session["user"]["id"]
-    others = {
-        user_id: user
-        for user_id, user in refresh_user_directory().items()
-        if user_id != current_user_id
-    }
+    users, check_ins = load_directory(checking_in_user_id=current_user_id)
+    others = {user_id: user for user_id, user in users.items() if user_id != current_user_id}
+
+    def status_of(user_id):
+        if check_ins is None:
+            return "unknown"
+        return "online" if is_recent_check_in(check_ins.get(user_id)) else "offline"
+
     # Emails appear only when two people share a name, to tell them apart.
     name_counts = Counter(user["name"] for user in others.values())
     return jsonify(
@@ -578,6 +616,7 @@ def get_users():
                     "name": user["name"]
                     if name_counts[user["name"]] == 1
                     else f"{user['name']} ({user['email']})",
+                    "status": status_of(user_id),
                 }
                 for user_id, user in others.items()
             ),
