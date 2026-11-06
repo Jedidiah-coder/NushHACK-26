@@ -19,6 +19,15 @@ const NOTIFICATION_DISMISSED_KEY = "bits-notification-prompt-dismissed";
 const MAX_ACTIVITY_ITEMS = 20;
 const MAX_REMEMBERED_READ_MESSAGES = 2000;
 const ACTIVITY_PREVIEW_LENGTH = 80;
+// "Are you OK?" appears after this long without activity, then again after the same gap.
+const SAFETY_CHECK_MS = 5 * 60 * 1000;
+const SAFETY_MISSED_CHECKS_FOR_SOS = 2;
+const SAFETY_TICK_MS = 5000;
+// Browsers slow background tabs to one tick a minute, so a longer gap means the device slept.
+const SAFETY_SLEEP_GAP_MS = 3 * 60 * 1000;
+const SAFETY_SOS_RETRY_MS = 30000;
+const SAFETY_ACTIVITY_SAVE_MS = 5000;
+const AUTOMATIC_SOS_REASON = "You didn't respond to 2 safety checks, so BITS sent this for you. ";
 const NOTIFICATIONS_BLOCKED_TEXT =
   "Notifications are blocked. To turn them on, allow them for this site in your browser's settings.";
 
@@ -66,6 +75,8 @@ const activityPanel = document.getElementById("activity-panel");
 const activityBadge = document.getElementById("activity-badge");
 const activityList = document.getElementById("activity-list");
 const activityEmpty = document.getElementById("activity-empty");
+const safetyCheck = document.getElementById("safety-check");
+const safetyCheckText = document.getElementById("safety-check-text");
 const noticeForm = document.getElementById("notice-form");
 const noticeInput = document.getElementById("notice-text");
 const noticeError = document.getElementById("notice-error");
@@ -88,6 +99,12 @@ let seenRecordIds = null;
 let messagesLoaded = false;
 let readMessageIds = null;
 let renderedActivity = "";
+let safetyLastActive = Date.now();
+let safetyLastTick = Date.now();
+let safetyShownLevel = 0;
+let safetyNotification = null;
+let safetySosSending = false;
+let safetySosRetryAt = 0;
 let activeSos = [];
 let renderedSos = "";
 let sosPanelView = null;
@@ -342,13 +359,13 @@ function renderSosPanel() {
     sosPanel.hidden = true;
   } else if (record.synced) {
     showSosPanelContent(
-      "SOS sent",
-      "Anyone with BITS open will see your alert, but this doesn't confirm someone has read it. If you're in immediate danger, call or text as well."
+      record.data.automatic ? "Automatic SOS sent" : "SOS sent",
+      `${record.data.automatic ? AUTOMATIC_SOS_REASON : ""}Anyone with BITS open will see your alert, but this doesn't confirm someone has read it. If you're safe, press Mark resolved. If you're in immediate danger, call or text as well.`
     );
   } else {
     showSosPanelContent(
       "SOS NOT sent yet: no data connection",
-      "Your alert is saved on this device and BITS will keep trying to send it. Call or text now, as these may work without internet."
+      `${record.data.automatic ? AUTOMATIC_SOS_REASON : ""}Your alert is saved on this device and BITS will keep trying to send it. Call or text now, as these may work without internet.`
     );
   }
 }
@@ -362,9 +379,11 @@ function createSosAlert(record) {
   const text = document.createElement("p");
   if (isOwn) {
     const state = record.synced ? "Sent" : "Not sent yet";
-    text.textContent = `Your SOS · ${time} · ${state}`;
+    const kind = record.data.automatic ? "Your automatic SOS" : "Your SOS";
+    text.textContent = `${kind} · ${time} · ${state}`;
   } else {
-    text.textContent = `SOS from ${record.data.sender_name ?? "Unknown"} · ${time}`;
+    const reason = record.data.automatic ? " · Automatic: no response to safety checks" : "";
+    text.textContent = `SOS from ${record.data.sender_name ?? "Unknown"} · ${time}${reason}`;
   }
 
   const button = document.createElement("button");
@@ -398,13 +417,13 @@ async function resolveSos(sosId) {
   }
 }
 
-async function sendSos() {
+async function sendSos({ automatic = false } = {}) {
   sosSend.disabled = true;
   try {
     const record = await requestJson("/api/records", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "sos" }),
+      body: JSON.stringify(automatic ? { type: "sos", automatic: true } : { type: "sos" }),
     });
     activeSos = [record, ...activeSos];
     sosPanelView = { name: "result", id: record.id };
@@ -418,6 +437,107 @@ async function sendSos() {
   }
   refreshRecords().catch(console.warn);
   refreshStatus();
+}
+
+function readLastActive() {
+  try {
+    // Shared with this person's other tabs, so activity in one counts for all of them.
+    const saved = Number(localStorage.getItem(`bits-last-active-${currentUserId}`));
+    return Math.max(safetyLastActive, saved || 0);
+  } catch {
+    return safetyLastActive;
+  }
+}
+
+function saveLastActive(now) {
+  safetyLastActive = now;
+  try {
+    localStorage.setItem(`bits-last-active-${currentUserId}`, String(now));
+  } catch (error) {
+    console.warn(error);
+  }
+}
+
+function missedSafetyLevel(now) {
+  return Math.floor((now - readLastActive()) / SAFETY_CHECK_MS);
+}
+
+function noteActivity() {
+  const now = Date.now();
+  // Once a check is showing, only I'm OK answers it, so a bumped mouse can't cancel an alarm.
+  if (now - safetyLastActive < SAFETY_ACTIVITY_SAVE_MS || missedSafetyLevel(now) >= 1) {
+    return;
+  }
+  saveLastActive(now);
+}
+
+function showSafetyCheck(level) {
+  if (level === safetyShownLevel) {
+    return;
+  }
+  safetyShownLevel = level;
+  safetyCheck.hidden = level === 0;
+  if (level === 0) {
+    safetyNotification?.close();
+    safetyNotification = null;
+    return;
+  }
+
+  safetyCheckText.textContent =
+    level < SAFETY_MISSED_CHECKS_FOR_SOS
+      ? "You've been inactive for a while. Press I'm OK, or BITS will check again in 5 minutes and then send an SOS."
+      : "Last check. If you don't press I'm OK within 5 minutes, BITS will send an SOS to everyone.";
+  safetyCheck.scrollIntoView({ block: "nearest" });
+  if (notificationsSupported && Notification.permission === "granted") {
+    safetyNotification = showNotification(
+      "Are you OK?",
+      "Open BITS and press I'm OK.",
+      "bits-safety-check",
+      () => {},
+      true
+    );
+  }
+}
+
+async function sendAutomaticSos(now) {
+  if (safetySosSending || now < safetySosRetryAt) {
+    return;
+  }
+  safetySosSending = true;
+  safetySosRetryAt = now + SAFETY_SOS_RETRY_MS;
+  try {
+    // Another tab or device may have sent it already.
+    await refreshRecords().catch(console.warn);
+    if (!activeSos.some((record) => record.data.sender_id === currentUserId)) {
+      await sendSos({ automatic: true });
+    }
+  } finally {
+    safetySosSending = false;
+  }
+}
+
+function checkSafety() {
+  if (!safetyCheck) {
+    return;
+  }
+  const now = Date.now();
+  const sinceLastTick = now - safetyLastTick;
+  safetyLastTick = now;
+
+  const hasOwnSos = activeSos.some((record) => record.data.sender_id === currentUserId);
+  // A device that was asleep can't tell whether its owner was active, so the wait starts again.
+  // During an SOS the wait also restarts, so resolving it doesn't set off another straight away.
+  if (sinceLastTick > SAFETY_SLEEP_GAP_MS || hasOwnSos) {
+    saveLastActive(now);
+  }
+
+  const level = missedSafetyLevel(now);
+  if (level > SAFETY_MISSED_CHECKS_FOR_SOS) {
+    showSafetyCheck(0);
+    sendAutomaticSos(now);
+    return;
+  }
+  showSafetyCheck(level);
 }
 
 function wasNotificationPromptDismissed() {
@@ -480,9 +600,11 @@ function showNotification(title, body, tag, openRecord, stayOpen = false) {
       openRecord();
       notification.close();
     };
+    return notification;
   } catch (error) {
     // Some mobile browsers don't allow notifications to be created this way.
     console.warn(error);
+    return null;
   }
 }
 
@@ -495,7 +617,10 @@ function openConversation(senderId) {
 function announceRecord(record) {
   const sender = record.data.sender_name ?? "Someone";
   if (record.data.type === "sos") {
-    showNotification(`SOS from ${sender}`, "Open BITS now.", record.id, () => {}, true);
+    const body = record.data.automatic
+      ? "Automatic: no response to safety checks. Open BITS now."
+      : "Open BITS now.";
+    showNotification(`SOS from ${sender}`, body, record.id, () => {}, true);
     return;
   }
   if (record.data.type === "message") {
@@ -1194,7 +1319,7 @@ sosButton.addEventListener("click", () => {
   sosPanelView = ownSos ? { name: "result", id: ownSos.id } : { name: "confirm" };
   renderSosPanel();
 });
-sosSend.addEventListener("click", sendSos);
+sosSend.addEventListener("click", () => sendSos());
 document.getElementById("sos-cancel").addEventListener("click", () => {
   sosPanelView = null;
   renderSosPanel();
@@ -1257,6 +1382,18 @@ for (const name of ["tone", "size"]) {
     }
   });
 }
+
+// Opening the page counts as activity, and every open page keeps checking.
+saveLastActive(Date.now());
+for (const eventName of ["pointerdown", "pointermove", "keydown", "scroll", "touchstart"]) {
+  window.addEventListener(eventName, noteActivity, { capture: true, passive: true });
+}
+document.getElementById("safety-ok")?.addEventListener("click", () => {
+  saveLastActive(Date.now());
+  checkSafety();
+});
+document.addEventListener("visibilitychange", checkSafety);
+setInterval(checkSafety, SAFETY_TICK_MS);
 
 activityButton?.addEventListener("click", () => setActivityOpen(activityPanel.hidden));
 document.getElementById("activity-close")?.addEventListener("click", () => {

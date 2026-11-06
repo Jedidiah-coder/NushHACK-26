@@ -276,6 +276,18 @@ ul {
   margin: 0 0 0.5rem;
 }
 
+.safety-ok {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-text);
+  font-weight: 700;
+}
+
+.safety-ok:hover {
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
+}
+
 .sos-panel-title {
   font-size: 1.125rem;
   font-weight: 700;

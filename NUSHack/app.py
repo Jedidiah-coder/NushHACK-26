@@ -305,6 +305,8 @@ def prepare_record(data, user):
         return {"type": "checklist_template", "name": name, "items": tasks}, None
 
     if kind == "sos":
+        if data.get("automatic") is True:
+            return {"type": "sos", "automatic": True}, None
         return {"type": "sos"}, None
 
     text = clean_text(data.get("text"))
