@@ -52,6 +52,9 @@
       <button class="tab" id="tab-home" type="button" role="tab" aria-controls="panel-home" aria-selected="true">Home</button>
       <button class="tab" id="tab-message" type="button" role="tab" aria-controls="panel-message" aria-selected="false" tabindex="-1">Direct Messages</button>
       <button class="tab" id="tab-checklist" type="button" role="tab" aria-controls="panel-checklist" aria-selected="false" tabindex="-1">Checklist</button>
+      {% if user.is_admin %}
+      <button class="tab" id="tab-accounts" type="button" role="tab" aria-controls="panel-accounts" aria-selected="false" tabindex="-1">Accounts</button>
+      {% endif %}
     </div>
 
     <section id="panel-home" role="tabpanel" aria-labelledby="tab-home">
@@ -117,6 +120,27 @@
       <ul class="record-list" id="inspection-list"></ul>
       <p id="inspection-empty">No inspections yet.</p>
     </section>
+
+    {% if user.is_admin %}
+    <section class="auth" id="panel-accounts" role="tabpanel" aria-labelledby="tab-accounts" hidden>
+      <h1>Grant an account</h1>
+      <form id="account-form">
+        <label for="account-name">Name</label>
+        <input id="account-name" name="name" type="text" maxlength="100" autocomplete="off" required>
+
+        <label for="account-email">Email</label>
+        <input id="account-email" name="email" type="email" maxlength="254" autocomplete="off" required>
+
+        <label for="account-password">Password</label>
+        <input id="account-password" name="password" type="password" minlength="8" maxlength="72" autocomplete="new-password" required>
+        <p class="field-hint">At least 8 characters. Give this to the person yourself.</p>
+
+        <button type="submit">Grant account</button>
+        <p class="form-error" id="account-error" role="alert"></p>
+        <p id="account-result" role="status"></p>
+      </form>
+    </section>
+    {% endif %}
   </main>
 
   <footer class="data-reset" id="data-reset" hidden>

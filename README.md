@@ -3,6 +3,13 @@ This is the repository for our NushHACK 2026 submission.
 # Dependencies
 - Flask
 - Supabase
+# Accounts
+People can't sign up themselves. The admin grants accounts from the Accounts tab.
+
+To create the admin, or make an existing account the admin, run this from the `NUSHack` folder:
+```
+python -m flask --app app create-admin
+```
 # Plan (For Now)
 1. Check whether the application is online.
 2. If online:

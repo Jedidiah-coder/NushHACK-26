@@ -389,6 +389,8 @@ ul {
 
 .tab {
   flex: 1;
+  /* Narrow side padding keeps four tabs on a small phone screen. */
+  padding-inline: 4px;
   border: 0;
   border-bottom: 3px solid transparent;
   border-radius: 0;

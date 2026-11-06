@@ -78,7 +78,10 @@ async function requestJson(path, options) {
     window.location.assign("/login");
   }
   if (!response.ok) {
-    throw new Error(`Request to ${path} failed with status ${response.status}`);
+    const body = await response.json().catch(() => ({}));
+    const error = new Error(`Request to ${path} failed with status ${response.status}`);
+    error.userMessage = body.error;
+    throw error;
   }
   return response.json();
 }
@@ -819,6 +822,29 @@ document.getElementById("reset-data").addEventListener("click", async () => {
   } catch (error) {
     console.warn(error);
     resetResult.textContent = "Couldn't reset your data. Please try again.";
+  }
+});
+
+// Only the admin's page has this form.
+document.getElementById("account-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  const accountError = document.getElementById("account-error");
+  const accountResult = document.getElementById("account-result");
+  accountError.textContent = "";
+  accountResult.textContent = "";
+  try {
+    const { name, email } = await requestJson("/api/accounts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(Object.fromEntries(new FormData(form))),
+    });
+    form.reset();
+    accountResult.textContent = `Account granted to ${name} (${email}).`;
+    refreshUsers().catch(console.warn);
+  } catch (error) {
+    console.warn(error);
+    accountError.textContent = error.userMessage ?? "Couldn't grant the account. Please try again.";
   }
 });
 

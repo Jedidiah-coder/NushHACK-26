@@ -7,6 +7,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import click
 import httpx
 from dotenv import load_dotenv
 from flask import (
@@ -29,7 +30,7 @@ DATA_FILE = BASE_DIR / "data.json"
 SUPABASE_TABLE = "records"
 SUPABASE_ERRORS = (httpx.HTTPError, APIError)
 AUTH_ERRORS = (httpx.HTTPError, AuthError)
-PUBLIC_ENDPOINTS = {"login", "register", "static"}
+PUBLIC_ENDPOINTS = {"login", "static"}
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 72
 MAX_MESSAGE_LENGTH = 500
@@ -39,6 +40,7 @@ MAX_CHECKLIST_TASK_LENGTH = 200
 MAX_CHECKLIST_TASKS = 50
 MAX_PULLED_RECORDS = 1000
 MAX_LISTED_USERS = 1000
+ADMIN_ROLE = "admin"
 SERVICE_UNAVAILABLE = "Can't reach the account service. Check your connection and try again."
 
 SOS_PHONE_NUMBER = os.getenv("SOS_PHONE_NUMBER", "").strip()
@@ -350,7 +352,7 @@ def is_visible(record, user_id, taken_down, resolved_sos):
 
 
 class AccountError(Exception):
-    """A sign-up or log-in problem, with a message that's safe to show the user."""
+    """An account or log-in problem, with a message that's safe to show the user."""
 
 
 def create_account(name, email, password):
@@ -367,7 +369,7 @@ def create_account(name, email, password):
         ).user
     except AUTH_ERRORS as error:
         code = getattr(error, "code", None)
-        app.logger.warning("Sign-up failed: %s %s", type(error).__name__, code)
+        app.logger.warning("Account creation failed: %s %s", type(error).__name__, code)
         if code in ("email_exists", "user_already_exists"):
             raise AccountError("An account with this email already exists.") from error
         if code == "weak_password":
@@ -406,12 +408,14 @@ def start_session(user):
         "id": user.id,
         "name": metadata.get("name") or user.email,
         "email": user.email,
+        # app_metadata, because people can edit their own user_metadata.
+        "is_admin": (user.app_metadata or {}).get("role") == ADMIN_ROLE,
     }
 
 
-def find_signup_problem(name, email, password):
+def find_account_problem(name, email, password):
     if not name or len(name) > 100:
-        return "Enter your name (up to 100 characters)."
+        return "Enter a name (up to 100 characters)."
     if "@" not in email or len(email) > 254:
         return "Enter a valid email address."
     if not MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
@@ -431,28 +435,6 @@ def require_login():
     return redirect(url_for("login"))
 
 
-@app.route("/register", methods=["GET", "POST"])
-def register():
-    if "user" in session:
-        return redirect(url_for("index"))
-
-    name = request.form.get("name", "").strip()
-    email = request.form.get("email", "").strip().lower()
-    error = None
-    if request.method == "POST":
-        password = request.form.get("password", "")
-        try:
-            error = find_signup_problem(name, email, password)
-            if not error:
-                start_session(create_account(name, email, password))
-                return redirect(url_for("index"))
-        except AccountError as account_error:
-            error = str(account_error)
-
-    status = 400 if error else 200
-    return render_template("auth.html", mode="register", name=name, email=email, error=error), status
-
-
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if "user" in session:
@@ -468,7 +450,7 @@ def login():
             error = str(account_error)
 
     status = 400 if error else 200
-    return render_template("auth.html", mode="login", email=email, error=error), status
+    return render_template("auth.html", email=email, error=error), status
 
 
 @app.route("/logout", methods=["POST"])
@@ -546,6 +528,30 @@ def get_users():
     )
 
 
+@app.route("/api/accounts", methods=["POST"])
+def grant_account():
+    if not session["user"].get("is_admin"):
+        return jsonify(error="Only the admin can grant accounts."), 403
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="Send a JSON object."), 400
+    name = clean_text(data.get("name"))
+    email = clean_text(data.get("email")).lower()
+    password = data.get("password")
+    if not isinstance(password, str):
+        password = ""
+
+    problem = find_account_problem(name, email, password)
+    if problem:
+        return jsonify(error=problem), 400
+    try:
+        create_account(name, email, password)
+    except AccountError as error:
+        return jsonify(error=str(error)), 400
+    return jsonify(name=name, email=email), 201
+
+
 @app.route("/api/records", methods=["POST"])
 def create_record():
     data = request.get_json(silent=True)
@@ -608,6 +614,31 @@ def sync():
     with data_lock:
         pending = sum(not record["synced"] for record in load_records())
     return jsonify(synced=synced, pending=pending)
+
+
+@app.cli.command("create-admin")
+def create_admin():
+    """Create an admin account, or make an existing account an admin."""
+    if supabase is None:
+        raise click.ClickException(SERVICE_UNAVAILABLE)
+
+    email = click.prompt("Admin email").strip().lower()
+    try:
+        users = supabase.auth.admin.list_users(page=1, per_page=MAX_LISTED_USERS)
+        user = next((u for u in users if (u.email or "").lower() == email), None)
+        if user is None:
+            name = click.prompt("Admin name").strip()
+            password = click.prompt("Admin password", hide_input=True, confirmation_prompt=True)
+            problem = find_account_problem(name, email, password)
+            if problem:
+                raise click.ClickException(problem)
+            user = create_account(name, email, password)
+        supabase.auth.admin.update_user_by_id(user.id, {"app_metadata": {"role": ADMIN_ROLE}})
+    except AccountError as error:
+        raise click.ClickException(str(error)) from error
+    except AUTH_ERRORS as error:
+        raise click.ClickException(SERVICE_UNAVAILABLE) from error
+    click.echo(f"{email} is now an admin. Log out and back in to see the Accounts tab.")
 
 
 if __name__ == "__main__":
