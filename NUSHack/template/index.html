@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NushHACK-26</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <main>
+    <h1>NushHACK-26</h1>
+    <p id="status" role="status">Checking connection...</p>
+
+    <form id="record-form">
+      <label for="note">New note</label>
+      <input id="note" type="text" required>
+      <button type="submit">Save</button>
+    </form>
+
+    <button id="sync-button" type="button">Sync now</button>
+
+    <h2>Records</h2>
+    <ul id="records"></ul>
+  </main>
+
+  <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html>

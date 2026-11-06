@@ -3,6 +3,10 @@
 .env.*
 !.env.example
 
+# Local records saved by the app
+data.json
+data.tmp
+
 # Python
 __pycache__/
 *.py[cod]
