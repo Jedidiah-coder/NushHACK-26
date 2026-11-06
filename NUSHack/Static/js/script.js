@@ -1305,6 +1305,24 @@ async function makeAccountAdmin(account) {
   }
 }
 
+async function removeUnconfirmedAccount(account) {
+  const confirmed = window.confirm(
+    `Remove ${account.name}'s account?\n\nThey haven't confirmed their email yet. You can grant the account again with the right address.`
+  );
+  if (!confirmed) {
+    return;
+  }
+  showAccountListMessage("");
+  try {
+    await requestJson(`/api/accounts/${account.id}`, { method: "DELETE" });
+    await refreshAccounts();
+    showAccountListMessage(`${account.name}'s account was removed.`);
+  } catch (error) {
+    console.warn(error);
+    showAccountListMessage("", error.userMessage ?? "Couldn't remove this account. Please try again.");
+  }
+}
+
 function createAccountItem(account) {
   const isAdmin = account.rank === "admin";
   const item = document.createElement("li");
@@ -1315,10 +1333,20 @@ function createAccountItem(account) {
   title.textContent = account.name;
   const meta = document.createElement("p");
   meta.className = "record-meta";
-  meta.textContent = isAdmin ? "Admin" : `Member · ${account.email}`;
+  const rank = isAdmin ? "Admin" : `Member · ${account.email}`;
+  meta.textContent = account.pending ? `${rank} · Waiting for email confirmation` : rank;
   item.append(title, meta);
 
-  if (!isAdmin) {
+  if (account.pending) {
+    const actions = document.createElement("div");
+    actions.className = "account-actions";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", () => removeUnconfirmedAccount(account));
+    actions.append(remove);
+    item.append(actions);
+  } else if (!isAdmin) {
     const passwordForm = createPasswordForm(account);
     const actions = document.createElement("div");
     actions.className = "account-actions";
@@ -1386,7 +1414,7 @@ document.getElementById("account-form")?.addEventListener("submit", async (event
       body: JSON.stringify(Object.fromEntries(new FormData(form))),
     });
     form.reset();
-    accountResult.textContent = `Account granted to ${name} (${email}).`;
+    accountResult.textContent = `Account granted to ${name} (${email}). It starts working once they log in and enter the code emailed to them.`;
     refreshUsers().catch(console.warn);
     refreshAccounts();
   } catch (error) {
