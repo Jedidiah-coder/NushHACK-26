@@ -16,6 +16,8 @@ const SCROLL_END_MARGIN_PX = 60;
 const MAX_SEPARATE_NOTIFICATIONS = 3;
 const NOTICE_PREVIEW_LENGTH = 120;
 const NOTIFICATION_DISMISSED_KEY = "bits-notification-prompt-dismissed";
+const NOTIFICATIONS_BLOCKED_TEXT =
+  "Notifications are blocked. To turn them on, allow them for this site in your browser's settings.";
 
 const tabs = [...document.querySelectorAll(".tab")];
 const statusElement = document.getElementById("status");
@@ -47,6 +49,10 @@ const notificationPrompt = document.getElementById("notification-prompt");
 const notificationText = document.getElementById("notification-text");
 const notificationEnable = document.getElementById("notification-enable");
 const notificationDismiss = document.getElementById("notification-dismiss");
+const settingsButton = document.getElementById("settings-button");
+const settingsPanel = document.getElementById("settings-panel");
+const settingsNotificationText = document.getElementById("settings-notification-text");
+const settingsNotificationEnable = document.getElementById("settings-notification-enable");
 const messageEmpty = document.getElementById("message-empty");
 const messageSend = document.getElementById("message-send");
 const recipientSelect = document.getElementById("message-recipient");
@@ -421,6 +427,27 @@ function updateNotificationPrompt() {
     !notificationsSupported ||
     Notification.permission !== "default" ||
     wasNotificationPromptDismissed();
+  updateNotificationSettings();
+}
+
+function updateNotificationSettings() {
+  const permission = notificationsSupported ? Notification.permission : "unsupported";
+  settingsNotificationText.textContent = {
+    granted: "Notifications are on. To turn them off, change this site's permission in your browser's settings.",
+    denied: NOTIFICATIONS_BLOCKED_TEXT,
+    default: "Notifications are off.",
+    unsupported: "Notifications aren't available in this browser.",
+  }[permission];
+  settingsNotificationEnable.hidden = permission !== "default";
+}
+
+function setSettingsOpen(open) {
+  settingsPanel.hidden = !open;
+  settingsButton.setAttribute("aria-expanded", String(open));
+  if (open) {
+    // The permission can be changed in the browser while BITS is open.
+    updateNotificationSettings();
+  }
 }
 
 function showNotification(title, body, tag, openRecord, stayOpen = false) {
@@ -993,16 +1020,41 @@ sosClose.addEventListener("click", () => {
   renderSosPanel();
 });
 
-notificationEnable.addEventListener("click", async () => {
+async function requestNotifications() {
   const permission = await Notification.requestPermission();
   if (permission === "denied") {
-    notificationText.textContent =
-      "Notifications are blocked. To turn them on, allow them for this site in your browser's settings.";
+    notificationText.textContent = NOTIFICATIONS_BLOCKED_TEXT;
     notificationEnable.hidden = true;
     notificationDismiss.textContent = "OK";
+    updateNotificationSettings();
     return;
   }
   updateNotificationPrompt();
+}
+
+notificationEnable.addEventListener("click", requestNotifications);
+settingsNotificationEnable.addEventListener("click", requestNotifications);
+
+for (const name of ["tone", "size"]) {
+  const select = document.getElementById(`settings-${name}`);
+  const saved = document.documentElement.dataset[name];
+  if ([...select.options].some((option) => option.value === saved)) {
+    select.value = saved;
+  }
+  select.addEventListener("change", () => {
+    document.documentElement.dataset[name] = select.value;
+    try {
+      localStorage.setItem(`bits-${name}`, select.value);
+    } catch (error) {
+      console.warn(error);
+    }
+  });
+}
+
+settingsButton.addEventListener("click", () => setSettingsOpen(settingsPanel.hidden));
+document.getElementById("settings-close").addEventListener("click", () => {
+  setSettingsOpen(false);
+  settingsButton.focus();
 });
 
 notificationDismiss.addEventListener("click", () => {

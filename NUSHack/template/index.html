@@ -6,6 +6,7 @@
   <title>BITS</title>
   <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <script src="{{ url_for('static', filename='js/appearance.js') }}"></script>
 </head>
 <body data-user-id="{{ user.id }}" data-user-name="{{ user.name }}" data-sos-phone="{{ sos_phone }}">
   <header class="app-header">
@@ -16,6 +17,7 @@
     </p>
     <form class="user-menu" action="{{ url_for('logout') }}" method="post">
       <span id="user-name">{{ user.name }}</span>
+      <button id="settings-button" type="button" aria-expanded="false" aria-controls="settings-panel">Settings</button>
       <button id="logout-button" type="submit">Log out</button>
     </form>
   </header>
@@ -38,6 +40,49 @@
   </section>
 
   <ul class="sos-alerts" id="sos-alerts"></ul>
+
+  <section class="settings-panel" id="settings-panel" aria-labelledby="settings-title" hidden>
+    <h2 id="settings-title">Settings</h2>
+
+    <div class="settings-section">
+      <h3>Account</h3>
+      <p>Name: {{ user.name }}</p>
+      <p>Email: {{ user.email }}</p>
+      <p>Rank: {{ "Admin" if user.is_admin else "Member" }}</p>
+    </div>
+
+    <div class="settings-section">
+      <h3>Appearance</h3>
+      <label for="settings-tone">Colour tone</label>
+      <select id="settings-tone">
+        <option value="navy" selected>Navy</option>
+        <option value="charcoal">Charcoal</option>
+        <option value="forest">Forest</option>
+        <option value="light">Light</option>
+      </select>
+      <label for="settings-size">Size</label>
+      <select id="settings-size">
+        <option value="small">Small</option>
+        <option value="medium" selected>Medium</option>
+        <option value="large">Large</option>
+        <option value="extra-large">Extra large</option>
+      </select>
+    </div>
+
+    <div class="settings-section">
+      <h3>Notifications</h3>
+      <p id="settings-notification-text"></p>
+      <button class="notification-enable" id="settings-notification-enable" type="button" hidden>Turn on notifications</button>
+    </div>
+
+    <div class="settings-section data-reset" id="data-reset" hidden>
+      <h3>Local data</h3>
+      <button id="reset-data" type="button">Factory reset your data</button>
+      <p id="reset-result" role="status"></p>
+    </div>
+
+    <button class="settings-close" id="settings-close" type="button">Close</button>
+  </section>
 
   <div class="notification-prompt" id="notification-prompt" hidden>
     <p id="notification-text">Get alerts for new direct messages, notices and SOS calls while BITS is open.</p>
@@ -156,11 +201,6 @@
     </section>
     {% endif %}
   </main>
-
-  <footer class="data-reset" id="data-reset" hidden>
-    <button id="reset-data" type="button">Factory reset your data</button>
-    <p id="reset-result" role="status"></p>
-  </footer>
 
   <script src="{{ url_for('static', filename='js/script.js') }}"></script>
 </body>
