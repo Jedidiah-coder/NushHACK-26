@@ -10,18 +10,17 @@ To create the first admin, or make an existing account an admin, run this from t
 ```
 python -m flask --app app create-admin
 ```
-# Plan (For Now)
+# How it works
 1. Check whether the application is online.
 2. If online:
    - Sync changes from the JSON file to the database.
    - Update both the JSON file and database together.
 3. If offline:
    - Temporarily store changes in the JSON file.
+   - Data will be resynced when online
 
 
-
-
-# Functionality for Officer (Might Implement)
+# Functionality for Officer
 
 ## 1. Patrols
 - **Ad-hoc observations:** Record observations at any checkpoint, such as "door ajar" or "light faulty".
@@ -34,7 +33,7 @@ python -m flask --app app create-admin
 - **PASS / FAIL / N/A:** Record the result for each step, with a required photo and note when marked FAIL.
 - **Automatic follow-up:** A FAIL automatically creates a follow-up (maintenance ticket or incident).
 
-## 3. Incident Reporting
+## 3. Incident Reporting (not yet)
 - **Quick report:** Select an incident type (trespass, theft, injury, fire, suspicious person or package, vandalism, medical), severity and location. Include photos, voice notes and a short description.
 - **Incident-specific templates:** Templates with required fields depending on the incident type (e.g. injury reports require the person's details, first aid given and whether an ambulance was called).
 - **Witness and involved-person details:** Record details, including an ID scan.
@@ -48,25 +47,25 @@ python -m flask --app app create-admin
 - **Emergency contacts:** Store contacts offline, with one-tap dialling.
 - **Muster / headcount:** Track personnel during evacuations.
 
-## 5. Access Control and Visitors
+## 5. Access Control and Visitors (not yet)
 - **Visitor registration:** Record name, ID, host, purpose, vehicle and time in and out.
 - **Pre-registered visitor list:** Download the visitor list for offline check-in.
 - **Watchlist / banned persons:** Store records offline so a match can be flagged at the gate.
 - **Contractor permits:** Check that a work permit is valid before allowing a contractor in.
 - **Vehicle log:** Record licence plate, time in and out, and parking bay.
 
-## 6. Keys and Assets
+## 6. Keys and Assets (not yet)
 - **Key log:** Record who took which key and when it was returned.
 - **Equipment checkout:** Track radios, torches and body cameras.
 - **Lost and found:** Maintain a log with photos.
 
-## 7. Shift Handover
+## 7. Shift Handover (not yet)
 - **Daily Occurrence Book (DOB):** Maintain a running log of everything that happens during the shift, commonly used by security companies in Singapore.
 - **Handover summary:** Summarise open incidents, unfinished checks, keys still out and notes for the next officer.
 - **Clock in / out:** Record attendance with location.
 - **Post orders:** Store site-specific instructions offline.
 
-## 8. Officer Support
+## 8. Officer Support (not yet)
 - **Sync status:** Display sync status everywhere:
   - `Saved on device`
   - `Pending upload`
