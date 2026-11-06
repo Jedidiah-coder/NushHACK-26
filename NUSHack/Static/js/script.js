@@ -461,10 +461,6 @@ for (const tab of tabs) {
   });
 }
 
-document.getElementById("get-started").addEventListener("click", () => {
-  selectTab(document.getElementById("tab-checklist"));
-});
-
 recipientSelect.addEventListener("change", () => {
   updateConversation();
   if (recipientSelect.value) {

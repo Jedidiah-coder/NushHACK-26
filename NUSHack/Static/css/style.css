@@ -101,7 +101,7 @@ ul {
 
 .noticeboard {
   max-width: 600px;
-  margin: 32px auto 0;
+  margin: 0 auto;
 }
 
 .noticeboard label {
