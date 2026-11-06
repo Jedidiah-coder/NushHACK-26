@@ -4,13 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BITS</title>
-  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+  <link rel="icon" href="{{ url_for('static', filename='favicon.png') }}" type="image/png">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <script src="{{ url_for('static', filename='js/appearance.js') }}"></script>
 </head>
 <body data-user-id="{{ user.id }}" data-user-name="{{ user.name }}" data-sos-phone="{{ sos_phone }}">
   <header class="app-header">
-    <span class="brand">BITS</span>
+    <img class="brand" src="{{ url_for('static', filename='logo.png') }}" alt="Securilock" width="387" height="320">
     <button class="sos-button" id="sos-button" type="button">SOS</button>
     <p id="status" role="status" data-state="checking">
       <span id="status-text">Checking...</span>
