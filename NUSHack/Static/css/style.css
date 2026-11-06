@@ -1,6 +1,50 @@
-/* Basic layout only. Visual design comes later. */
+/* Change the colour scheme here. */
+:root {
+  color-scheme: dark;
+
+  --page: #0f1620;
+  --surface: #18222f;
+  --raised: #223042;
+  --hover: #2c3d53;
+  --border: #34455a;
+  --control-border: #647a93;
+  --text: #e6ebf2;
+  --text-muted: #a9b6c6;
+  --primary: #2563a8;
+  --primary-hover: #1f5692;
+  --primary-text: #ffffff;
+  --link: #8fc1ff;
+  --bubble-sent: #1f4a78;
+  --bubble-sent-text: #ffffff;
+  --bubble-received: #2a394c;
+  --bubble-meta: #ccd8e6;
+  --online: #4ade80;
+  --offline: #fbbf24;
+  --error: #ff9c94;
+}
+
 * {
   box-sizing: border-box;
+}
+
+:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+
+a {
+  color: var(--link);
+}
+
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+h1,
+h2,
+.brand {
+  color: var(--text);
 }
 
 [hidden] {
@@ -11,8 +55,8 @@ body {
   max-width: 800px;
   margin: 0 auto;
   padding: 16px;
-  background: #ffffff;
-  color: #1a1a1a;
+  background: var(--page);
+  color: var(--text);
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
   line-height: 1.5;
 }
@@ -25,7 +69,50 @@ input {
 button {
   min-height: 44px;
   padding: 8px 16px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--text);
   cursor: pointer;
+}
+
+button:hover {
+  background: var(--hover);
+}
+
+button[type="submit"] {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-text);
+}
+
+button[type="submit"]:hover {
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
+}
+
+button:disabled,
+input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+input,
+select,
+textarea {
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+input[type="radio"] {
+  accent-color: var(--link);
+}
+
+::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
 }
 
 input[type="text"] {
@@ -70,6 +157,17 @@ ul {
   white-space: nowrap;
 }
 
+/* Logging out submits a form, but it isn't the page's main action. */
+.user-menu button[type="submit"] {
+  border-color: var(--control-border);
+  background: var(--raised);
+  color: var(--text);
+}
+
+.user-menu button[type="submit"]:hover {
+  background: var(--hover);
+}
+
 .auth {
   max-width: 400px;
 }
@@ -91,7 +189,7 @@ ul {
 
 .field-hint {
   margin: 4px 0 0;
-  color: #595959;
+  color: var(--text-muted);
   font-size: 0.875rem;
 }
 
@@ -140,29 +238,40 @@ ul {
   font: inherit;
 }
 
+#status {
+  color: var(--text-muted);
+}
+
 #status[data-state="online"] {
-  color: #116b3d;
+  color: var(--online);
 }
 
 #status[data-state="offline"] {
-  color: #8a4b00;
+  color: var(--offline);
 }
 
 .tabs {
   display: flex;
-  border-bottom: 1px solid #999999;
+  border-bottom: 1px solid var(--border);
 }
 
 .tab {
   flex: 1;
   border: 0;
   border-bottom: 3px solid transparent;
+  border-radius: 0;
   background: none;
-  color: inherit;
+  color: var(--text-muted);
+}
+
+.tab:hover {
+  background: var(--surface);
+  color: var(--text);
 }
 
 .tab[aria-selected="true"] {
-  border-bottom-color: #1a1a1a;
+  border-bottom-color: var(--link);
+  color: var(--text);
   font-weight: 600;
 }
 
@@ -181,8 +290,9 @@ ul {
   min-height: 240px;
   padding: 8px;
   overflow-y: auto;
-  border: 1px solid #dddddd;
-  background: #f0f0f0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
 }
 
 /* The header can wrap onto two lines on phones, leaving less room for the chat. */
@@ -195,7 +305,7 @@ ul {
 
 .chat-empty {
   margin: 8px 0;
-  color: #595959;
+  color: var(--text-muted);
   text-align: center;
 }
 
@@ -219,16 +329,18 @@ ul {
 
 .message-sent {
   align-self: flex-end;
-  background: #d9f5d6;
+  background: var(--bubble-sent);
+  color: var(--bubble-sent-text);
 }
 
 .message-received {
   align-self: flex-start;
-  background: #ffffff;
+  background: var(--bubble-received);
+  color: var(--text);
 }
 
 .message .message-meta {
-  color: #595959;
+  color: var(--bubble-meta);
   font-size: 0.75rem;
   text-align: right;
 }
@@ -238,7 +350,8 @@ ul {
   margin: 6px 0;
   padding: 2px 10px;
   border-radius: 8px;
-  background: #dddddd;
+  background: var(--raised);
+  color: var(--text-muted);
   font-size: 0.8125rem;
 }
 
@@ -249,12 +362,12 @@ ul {
 }
 
 .form-error {
-  color: #b00020;
+  color: var(--error);
 }
 
 .record {
   padding: 8px 0;
-  border-bottom: 1px solid #dddddd;
+  border-bottom: 1px solid var(--border);
 }
 
 .record p {
@@ -263,11 +376,11 @@ ul {
 }
 
 .record .record-detail {
-  color: #b00020;
+  color: var(--error);
 }
 
 .record .record-meta {
-  color: #595959;
+  color: var(--text-muted);
   font-size: 0.875rem;
 }
 
@@ -332,3 +445,4 @@ ul {
   display: block;
   margin-top: 8px;
 }
+
