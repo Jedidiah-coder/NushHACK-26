@@ -3,6 +3,12 @@ This is the repository for our NushHACK 2026 submission.
 # Dependencies
 - Flask
 - Supabase
+- dotenv
+You can install them by typing
+```
+pip instal [dependency]
+```
+in command prompt/powershell
 # Accounts
 People can't sign up themselves. Admins grant accounts and other admins from the Accounts tab, where they can also see every account's rank, see members' login emails and set new passwords for members.
 
