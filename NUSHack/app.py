@@ -70,17 +70,31 @@ supabase = (
 data_lock = threading.Lock()
 
 
-def load_records():
+def load_store():
     if not DATA_FILE.exists():
-        return []
-    return json.loads(DATA_FILE.read_text(encoding="utf-8"))
+        return {"last_logouts": {}, "records": []}
+    stored = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+    # Files from before logouts were tracked hold just a list of records.
+    if isinstance(stored, list):
+        return {"last_logouts": {}, "records": stored}
+    return stored
+
+
+def save_store(store):
+    # Write to a temporary file first so a crash can't leave data.json half-written.
+    temp_file = DATA_FILE.with_suffix(".tmp")
+    temp_file.write_text(json.dumps(store, indent=2), encoding="utf-8")
+    os.replace(temp_file, DATA_FILE)
+
+
+def load_records():
+    return load_store()["records"]
 
 
 def save_records(records):
-    # Write to a temporary file first so a crash can't leave data.json half-written.
-    temp_file = DATA_FILE.with_suffix(".tmp")
-    temp_file.write_text(json.dumps(records, indent=2), encoding="utf-8")
-    os.replace(temp_file, DATA_FILE)
+    store = load_store()
+    store["records"] = records
+    save_store(store)
 
 
 def is_online():
@@ -95,21 +109,36 @@ def is_online():
 
 
 def sync_pending_records():
-    """Upload unsynced JSON records to Supabase. Returns True if none remain."""
+    """Upload unsynced JSON records to Supabase. Returns True if none remain.
+
+    New records always upload. A record may replace a row that already exists in
+    Supabase only if its author's last logout happened while offline.
+    """
     if supabase is None:
         return False
 
     with data_lock:
-        pending = [record for record in load_records() if not record["synced"]]
+        store = load_store()
+    pending = [record for record in store["records"] if not record["synced"]]
     if not pending:
         return True
 
-    rows = [
-        {key: record[key] for key in ("id", "data", "created_at")}
-        for record in pending
-    ]
+    last_logouts = store["last_logouts"]
+    overwriting, insert_only = [], []
+    for record in pending:
+        last_logout = last_logouts.get(record["data"].get("sender_id"), {})
+        may_overwrite = last_logout.get("status") == "offline"
+        (overwriting if may_overwrite else insert_only).append(
+            {key: record[key] for key in ("id", "data", "created_at")}
+        )
+
     try:
-        supabase.table(SUPABASE_TABLE).upsert(rows).execute()
+        if overwriting:
+            supabase.table(SUPABASE_TABLE).upsert(overwriting).execute()
+        if insert_only:
+            supabase.table(SUPABASE_TABLE).upsert(
+                insert_only, ignore_duplicates=True
+            ).execute()
     except SUPABASE_ERRORS as error:
         app.logger.warning("Sync failed, records stay in data.json: %s", error)
         return False
@@ -125,7 +154,7 @@ def sync_pending_records():
 
 
 def pull_remote_records():
-    """Copy recent records made on other devices from Supabase into data.json."""
+    """Copy recent records from Supabase into data.json. Supabase wins once synced."""
     if supabase is None:
         return
     try:
@@ -143,12 +172,19 @@ def pull_remote_records():
 
     with data_lock:
         records = load_records()
-        known_ids = {record["id"] for record in records}
-        new_records = [
-            {**row, "synced": True} for row in rows if row["id"] not in known_ids
-        ]
-        if new_records:
-            save_records(records + new_records)
+        records_by_id = {record["id"]: record for record in records}
+        changed = False
+        for row in rows:
+            local = records_by_id.get(row["id"])
+            if local is None:
+                records.append({**row, "synced": True})
+                changed = True
+            elif local["synced"] and local["data"] != row["data"]:
+                # Records still waiting to upload are left alone.
+                local["data"] = row["data"]
+                changed = True
+        if changed:
+            save_records(records)
 
 
 class AccountError(Exception):
@@ -275,6 +311,19 @@ def login():
 
 @app.route("/logout", methods=["POST"])
 def logout():
+    online = is_online()
+    if online:
+        # Sync first, so waiting records still use the permission from the last logout.
+        sync_pending_records()
+
+    with data_lock:
+        store = load_store()
+        store["last_logouts"][session["user"]["id"]] = {
+            "status": "online" if online else "offline",
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+        save_store(store)
+
     session.clear()
     return redirect(url_for("login"))
 
