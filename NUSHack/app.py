@@ -7,6 +7,7 @@ import threading
 import uuid
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
 
 import click
@@ -43,6 +44,7 @@ MAX_CHECKLIST_TASKS = 50
 MAX_PULLED_RECORDS = 1000
 MAX_LISTED_USERS = 1000
 ADMIN_ROLE = "admin"
+MEMBER_ROLE = "member"
 SERVICE_UNAVAILABLE = "Can't reach the account service. Check your connection and try again."
 
 SOS_PHONE_NUMBER = os.getenv("SOS_PHONE_NUMBER", "").strip()
@@ -357,18 +359,24 @@ class AccountError(Exception):
     """An account or log-in problem, with a message that's safe to show the user."""
 
 
-def create_account(name, email, password):
+def is_admin_account(user):
+    # app_metadata, because people can edit their own user_metadata.
+    return (user.app_metadata or {}).get("role") == ADMIN_ROLE
+
+
+def create_account(name, email, password, rank=MEMBER_ROLE):
     if supabase is None:
         raise AccountError(SERVICE_UNAVAILABLE)
+    attributes = {
+        "email": email,
+        "password": password,
+        "email_confirm": True,
+        "user_metadata": {"name": name},
+    }
+    if rank == ADMIN_ROLE:
+        attributes["app_metadata"] = {"role": ADMIN_ROLE}
     try:
-        return supabase.auth.admin.create_user(
-            {
-                "email": email,
-                "password": password,
-                "email_confirm": True,
-                "user_metadata": {"name": name},
-            }
-        ).user
+        return supabase.auth.admin.create_user(attributes).user
     except AUTH_ERRORS as error:
         code = getattr(error, "code", None)
         app.logger.warning("Account creation failed: %s %s", type(error).__name__, code)
@@ -378,6 +386,31 @@ def create_account(name, email, password):
             raise AccountError("Please choose a stronger password.") from error
         if code in ("email_address_invalid", "validation_failed"):
             raise AccountError("Enter a valid email address.") from error
+        raise AccountError(SERVICE_UNAVAILABLE) from error
+
+
+def list_accounts():
+    if supabase is None:
+        raise AccountError(SERVICE_UNAVAILABLE)
+    try:
+        return supabase.auth.admin.list_users(page=1, per_page=MAX_LISTED_USERS)
+    except AUTH_ERRORS as error:
+        app.logger.warning("Could not list accounts: %s", type(error).__name__)
+        raise AccountError(SERVICE_UNAVAILABLE) from error
+
+
+def find_account(user_id):
+    return next((user for user in list_accounts() if user.id == user_id), None)
+
+
+def update_account(user_id, attributes):
+    try:
+        supabase.auth.admin.update_user_by_id(user_id, attributes)
+    except AUTH_ERRORS as error:
+        code = getattr(error, "code", None)
+        app.logger.warning("Account update failed: %s %s", type(error).__name__, code)
+        if code == "weak_password":
+            raise AccountError("Please choose a stronger password.") from error
         raise AccountError(SERVICE_UNAVAILABLE) from error
 
 
@@ -410,9 +443,17 @@ def start_session(user):
         "id": user.id,
         "name": metadata.get("name") or user.email,
         "email": user.email,
-        # app_metadata, because people can edit their own user_metadata.
-        "is_admin": (user.app_metadata or {}).get("role") == ADMIN_ROLE,
+        "is_admin": is_admin_account(user),
     }
+
+
+def find_password_problem(password):
+    if not MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
+        return (
+            f"Password must be {MIN_PASSWORD_LENGTH} to "
+            f"{MAX_PASSWORD_LENGTH} characters long."
+        )
+    return None
 
 
 def find_account_problem(name, email, password):
@@ -420,12 +461,27 @@ def find_account_problem(name, email, password):
         return "Enter a name (up to 100 characters)."
     if "@" not in email or len(email) > 254:
         return "Enter a valid email address."
-    if not MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
-        return (
-            f"Password must be {MIN_PASSWORD_LENGTH} to "
-            f"{MAX_PASSWORD_LENGTH} characters long."
-        )
-    return None
+    return find_password_problem(password)
+
+
+def read_password(data):
+    password = data.get("password") if isinstance(data, dict) else None
+    return password if isinstance(password, str) else ""
+
+
+def admin_only(view):
+    @wraps(view)
+    def checked_view(*args, **kwargs):
+        if not session["user"].get("is_admin"):
+            return jsonify(error="Only an admin can do this."), 403
+        return view(*args, **kwargs)
+
+    return checked_view
+
+
+@app.errorhandler(AccountError)
+def show_account_error(error):
+    return jsonify(error=str(error)), 400
 
 
 @app.before_request
@@ -530,28 +586,68 @@ def get_users():
     )
 
 
-@app.route("/api/accounts", methods=["POST"])
-def grant_account():
-    if not session["user"].get("is_admin"):
-        return jsonify(error="Only the admin can grant accounts."), 403
+def describe_account(user):
+    """Return what admins see. Other admins' login emails are left out."""
+    is_admin = is_admin_account(user)
+    name = (user.user_metadata or {}).get("name")
+    if is_admin:
+        return {"id": user.id, "name": name or "Unnamed admin", "rank": ADMIN_ROLE}
+    return {"id": user.id, "name": name or user.email, "email": user.email, "rank": MEMBER_ROLE}
 
+
+@app.route("/api/accounts")
+@admin_only
+def get_accounts():
+    accounts = [describe_account(user) for user in list_accounts()]
+    # Admins first, then by name.
+    accounts.sort(key=lambda a: (a["rank"] != ADMIN_ROLE, a["name"].casefold()))
+    return jsonify(accounts)
+
+
+@app.route("/api/accounts", methods=["POST"])
+@admin_only
+def grant_account():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify(error="Send a JSON object."), 400
     name = clean_text(data.get("name"))
     email = clean_text(data.get("email")).lower()
-    password = data.get("password")
-    if not isinstance(password, str):
-        password = ""
+    password = read_password(data)
+    rank = data.get("rank", MEMBER_ROLE)
+    if rank not in (MEMBER_ROLE, ADMIN_ROLE):
+        return jsonify(error="Choose a rank."), 400
 
     problem = find_account_problem(name, email, password)
     if problem:
         return jsonify(error=problem), 400
-    try:
-        create_account(name, email, password)
-    except AccountError as error:
-        return jsonify(error=str(error)), 400
-    return jsonify(name=name, email=email), 201
+    create_account(name, email, password, rank)
+    return jsonify(name=name, email=email, rank=rank), 201
+
+
+@app.route("/api/accounts/<user_id>/admin", methods=["POST"])
+@admin_only
+def make_admin(user_id):
+    if find_account(user_id) is None:
+        return jsonify(error="Account not found."), 404
+    update_account(user_id, {"app_metadata": {"role": ADMIN_ROLE}})
+    return jsonify(rank=ADMIN_ROLE)
+
+
+@app.route("/api/accounts/<user_id>/password", methods=["POST"])
+@admin_only
+def set_account_password(user_id):
+    password = read_password(request.get_json(silent=True))
+    problem = find_password_problem(password)
+    if problem:
+        return jsonify(error=problem), 400
+
+    account = find_account(user_id)
+    if account is None:
+        return jsonify(error="Account not found."), 404
+    if is_admin_account(account):
+        return jsonify(error="Admin passwords can't be changed here."), 403
+    update_account(user_id, {"password": password})
+    return jsonify(changed=True)
 
 
 @app.route("/api/records", methods=["POST"])

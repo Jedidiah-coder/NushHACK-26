@@ -309,10 +309,25 @@ ul {
   margin-top: 12px;
 }
 
-.auth input {
+.auth input,
+.auth select,
+.account-password input {
   width: 100%;
   min-height: 44px;
   padding: 8px;
+  font: inherit;
+}
+
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.account-password {
+  max-width: 400px;
+  margin-top: 8px;
 }
 
 .auth button {

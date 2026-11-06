@@ -4,9 +4,9 @@ This is the repository for our NushHACK 2026 submission.
 - Flask
 - Supabase
 # Accounts
-People can't sign up themselves. The admin grants accounts from the Accounts tab.
+People can't sign up themselves. Admins grant accounts and other admins from the Accounts tab, where they can also see every account's rank, see members' login emails and set new passwords for members.
 
-To create the admin, or make an existing account the admin, run this from the `NUSHack` folder:
+To create the first admin, or make an existing account an admin, run this from the `NUSHack` folder:
 ```
 python -m flask --app app create-admin
 ```

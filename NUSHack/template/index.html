@@ -122,23 +122,37 @@
     </section>
 
     {% if user.is_admin %}
-    <section class="auth" id="panel-accounts" role="tabpanel" aria-labelledby="tab-accounts" hidden>
-      <h1>Grant an account</h1>
-      <form id="account-form">
-        <label for="account-name">Name</label>
-        <input id="account-name" name="name" type="text" maxlength="100" autocomplete="off" required>
+    <section id="panel-accounts" role="tabpanel" aria-labelledby="tab-accounts" hidden>
+      <div class="auth">
+        <h1>Grant an account</h1>
+        <form id="account-form">
+          <label for="account-name">Name</label>
+          <input id="account-name" name="name" type="text" maxlength="100" autocomplete="off" required>
 
-        <label for="account-email">Email</label>
-        <input id="account-email" name="email" type="email" maxlength="254" autocomplete="off" required>
+          <label for="account-email">Email</label>
+          <input id="account-email" name="email" type="email" maxlength="254" autocomplete="off" required>
 
-        <label for="account-password">Password</label>
-        <input id="account-password" name="password" type="password" minlength="8" maxlength="72" autocomplete="new-password" required>
-        <p class="field-hint">At least 8 characters. Give this to the person yourself.</p>
+          <label for="account-password">Password</label>
+          <input id="account-password" name="password" type="password" minlength="8" maxlength="72" autocomplete="new-password" required>
+          <p class="field-hint">At least 8 characters. Give this to the person yourself.</p>
 
-        <button type="submit">Grant account</button>
-        <p class="form-error" id="account-error" role="alert"></p>
-        <p id="account-result" role="status"></p>
-      </form>
+          <label for="account-rank">Rank</label>
+          <select id="account-rank" name="rank">
+            <option value="member" selected>Member</option>
+            <option value="admin">Admin</option>
+          </select>
+
+          <button type="submit">Grant account</button>
+          <p class="form-error" id="account-error" role="alert"></p>
+          <p id="account-result" role="status"></p>
+        </form>
+      </div>
+
+      <h2>Existing accounts</h2>
+      <p class="field-hint">Passwords can't be shown because they're stored scrambled. If a member forgets theirs, set a new one.</p>
+      <p class="form-error" id="account-list-error" role="alert"></p>
+      <p id="account-list-result" role="status"></p>
+      <ul class="record-list" id="account-list"></ul>
     </section>
     {% endif %}
   </main>

@@ -29,6 +29,11 @@ const messageChat = document.getElementById("message-chat");
 const messageList = document.getElementById("message-list");
 const messagePanel = document.getElementById("panel-message");
 const homePanel = document.getElementById("panel-home");
+// Only an admin's page has the Accounts tab, so these are null for everyone else.
+const accountsPanel = document.getElementById("panel-accounts");
+const accountList = document.getElementById("account-list");
+const accountListError = document.getElementById("account-list-error");
+const accountListResult = document.getElementById("account-list-result");
 const sosButton = document.getElementById("sos-button");
 const sosPanel = document.getElementById("sos-panel");
 const sosPanelTitle = document.getElementById("sos-panel-title");
@@ -95,6 +100,9 @@ function selectTab(tab) {
   }
   if (!messagePanel.hidden) {
     scrollChatToEnd();
+  }
+  if (accountsPanel && !accountsPanel.hidden) {
+    refreshAccounts();
   }
 }
 
@@ -825,7 +833,127 @@ document.getElementById("reset-data").addEventListener("click", async () => {
   }
 });
 
-// Only the admin's page has this form.
+function showAccountListMessage(result, error = "") {
+  accountListResult.textContent = result;
+  accountListError.textContent = error;
+}
+
+function createPasswordForm(account) {
+  const form = document.createElement("form");
+  form.className = "account-password";
+  form.hidden = true;
+
+  const label = document.createElement("label");
+  label.textContent = `New password for ${account.name}`;
+  const input = document.createElement("input");
+  input.type = "password";
+  input.minLength = 8;
+  input.maxLength = 72;
+  input.autocomplete = "new-password";
+  input.required = true;
+  label.append(input);
+
+  const actions = document.createElement("div");
+  actions.className = "account-actions";
+  const save = document.createElement("button");
+  save.type = "submit";
+  save.textContent = "Save password";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => {
+    form.reset();
+    form.hidden = true;
+  });
+  actions.append(save, cancel);
+  form.append(label, actions);
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    showAccountListMessage("");
+    try {
+      await requestJson(`/api/accounts/${account.id}/password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: input.value }),
+      });
+      form.reset();
+      form.hidden = true;
+      showAccountListMessage(`Password changed for ${account.name}. Give them the new one yourself.`);
+    } catch (error) {
+      console.warn(error);
+      showAccountListMessage("", error.userMessage ?? "Couldn't change the password. Please try again.");
+    }
+  });
+  return form;
+}
+
+async function makeAccountAdmin(account) {
+  const confirmed = window.confirm(
+    `Make ${account.name} an admin?\n\nThey'll be able to grant accounts, make other admins, see members' login emails and change members' passwords. This can't be undone in BITS.`
+  );
+  if (!confirmed) {
+    return;
+  }
+  showAccountListMessage("");
+  try {
+    await requestJson(`/api/accounts/${account.id}/admin`, { method: "POST" });
+    await refreshAccounts();
+    showAccountListMessage(
+      `${account.name} is now an admin. They need to log out and back in to see the Accounts tab.`
+    );
+  } catch (error) {
+    console.warn(error);
+    showAccountListMessage("", error.userMessage ?? "Couldn't make this account an admin. Please try again.");
+  }
+}
+
+function createAccountItem(account) {
+  const isAdmin = account.rank === "admin";
+  const item = document.createElement("li");
+  item.className = "record";
+
+  const title = document.createElement("p");
+  title.className = "record-title";
+  title.textContent = account.name;
+  const meta = document.createElement("p");
+  meta.className = "record-meta";
+  meta.textContent = isAdmin ? "Admin" : `Member · ${account.email}`;
+  item.append(title, meta);
+
+  if (!isAdmin) {
+    const passwordForm = createPasswordForm(account);
+    const actions = document.createElement("div");
+    actions.className = "account-actions";
+    const setPassword = document.createElement("button");
+    setPassword.type = "button";
+    setPassword.textContent = "Set new password";
+    setPassword.addEventListener("click", () => {
+      passwordForm.hidden = false;
+      passwordForm.querySelector("input").focus();
+    });
+    const promote = document.createElement("button");
+    promote.type = "button";
+    promote.textContent = "Make admin";
+    promote.addEventListener("click", () => makeAccountAdmin(account));
+    actions.append(setPassword, promote);
+    item.append(actions, passwordForm);
+  }
+  return item;
+}
+
+async function refreshAccounts() {
+  try {
+    const accounts = await requestJson("/api/accounts");
+    accountList.replaceChildren(...accounts.map(createAccountItem));
+    accountListError.textContent = "";
+  } catch (error) {
+    console.warn(error);
+    accountListError.textContent = error.userMessage ?? "Couldn't load the accounts. Please try again.";
+  }
+}
+
+// Only an admin's page has this form.
 document.getElementById("account-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;
@@ -842,6 +970,7 @@ document.getElementById("account-form")?.addEventListener("submit", async (event
     form.reset();
     accountResult.textContent = `Account granted to ${name} (${email}).`;
     refreshUsers().catch(console.warn);
+    refreshAccounts();
   } catch (error) {
     console.warn(error);
     accountError.textContent = error.userMessage ?? "Couldn't grant the account. Please try again.";
