@@ -137,6 +137,7 @@
       <button class="tab" id="tab-home" type="button" role="tab" aria-controls="panel-home" aria-selected="true">Home</button>
       <button class="tab" id="tab-message" type="button" role="tab" aria-controls="panel-message" aria-selected="false" tabindex="-1">Direct Messages</button>
       <button class="tab" id="tab-checklist" type="button" role="tab" aria-controls="panel-checklist" aria-selected="false" tabindex="-1">Checklist</button>
+      <button class="tab" id="tab-map" type="button" role="tab" aria-controls="panel-map" aria-selected="false" tabindex="-1">Map</button>
       {% if user.is_admin %}
       <button class="tab" id="tab-accounts" type="button" role="tab" aria-controls="panel-accounts" aria-selected="false" tabindex="-1">Accounts</button>
       {% endif %}
@@ -211,6 +212,59 @@
       <h2>Recent inspections</h2>
       <ul class="record-list" id="inspection-list"></ul>
       <p id="inspection-empty">No inspections yet.</p>
+    </section>
+
+    <section id="panel-map" role="tabpanel" aria-labelledby="tab-map" hidden>
+      <div class="checklist-header">
+        <h2>Map</h2>
+        <button id="map-edit" type="button">Redesign map</button>
+      </div>
+      <div class="map-levels" id="map-levels" role="group" aria-label="Levels"></div>
+      <ul class="map-legend" id="map-legend" aria-label="Rooms on this level by status"></ul>
+      <div class="map-scroll">
+        <div class="map-floor" id="map-floor"></div>
+      </div>
+      <p class="field-hint" id="map-empty" hidden>This level has no rooms yet.</p>
+      <p class="form-error" id="map-error" role="alert"></p>
+
+      <div class="map-room-panel" id="map-room-panel" hidden>
+        <h3 id="map-room-title"></h3>
+        <div class="map-status-buttons" id="map-status-buttons" role="group" aria-label="Room status"></div>
+        <p class="record-meta" id="map-room-meta"></p>
+        <button id="map-room-close" type="button">Close</button>
+      </div>
+
+      <form class="map-editor" id="map-editor" hidden>
+        <fieldset>
+          <legend>Level</legend>
+          <label for="map-level-name">Level name</label>
+          <input id="map-level-name" type="text" maxlength="40" autocomplete="off" required>
+          <div class="editor-actions">
+            <button id="map-add-level" type="button">Add level</button>
+            <button id="map-level-earlier" type="button">Move earlier</button>
+            <button id="map-level-later" type="button">Move later</button>
+            <button id="map-delete-level" type="button">Delete level</button>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Rooms</legend>
+          <p class="field-hint">Drag a room to move it, or drag its corner to resize it. With a keyboard, the arrow keys move the selected room and Shift + arrow keys resize it.</p>
+          <div class="editor-actions">
+            <button id="map-add-room" type="button">Add room</button>
+          </div>
+          <div id="map-room-fields" hidden>
+            <label for="map-room-name">Room name</label>
+            <input id="map-room-name" type="text" maxlength="40" autocomplete="off">
+            <div class="editor-actions">
+              <button id="map-delete-room" type="button">Delete room</button>
+            </div>
+          </div>
+        </fieldset>
+        <div class="editor-actions">
+          <button type="submit">Save changes</button>
+          <button id="map-editor-cancel" type="button">Cancel</button>
+        </div>
+      </form>
     </section>
 
     {% if user.is_admin %}

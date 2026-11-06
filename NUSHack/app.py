@@ -43,6 +43,16 @@ DEFAULT_NOTICE_TAG = "general"
 MAX_CHECKLIST_NAME_LENGTH = 100
 MAX_CHECKLIST_TASK_LENGTH = 200
 MAX_CHECKLIST_TASKS = 50
+MAP_STATUSES = ("unchecked", "safe", "na", "dangerous")
+MAP_ID_PATTERN = r"[A-Za-z0-9_-]{1,64}"
+# These match the map code in script.js.
+MAP_COLUMNS = 24
+MAP_ROWS = 16
+MIN_MAP_ROOM_WIDTH = 3
+MIN_MAP_ROOM_HEIGHT = 2
+MAX_MAP_LEVELS = 20
+MAX_MAP_ROOMS_PER_LEVEL = 60
+MAX_MAP_NAME_LENGTH = 40
 MAX_PULLED_RECORDS = 1000
 MAX_LISTED_USERS = 1000
 ADMIN_ROLE = "admin"
@@ -290,11 +300,81 @@ def clean_text(value):
     return value.strip() if isinstance(value, str) else ""
 
 
+def is_new_map_id(value, seen_ids):
+    if not isinstance(value, str) or not re.fullmatch(MAP_ID_PATTERN, value) or value in seen_ids:
+        return False
+    seen_ids.add(value)
+    return True
+
+
+def is_valid_map_room_shape(room):
+    x, y, width, height = (room.get(key) for key in ("x", "y", "w", "h"))
+    # Exactly int, because Python also counts True and False as ints.
+    if not all(type(number) is int for number in (x, y, width, height)):
+        return False
+    return (
+        x >= 0
+        and y >= 0
+        and width >= MIN_MAP_ROOM_WIDTH
+        and height >= MIN_MAP_ROOM_HEIGHT
+        and x + width <= MAP_COLUMNS
+        and y + height <= MAP_ROWS
+    )
+
+
+def prepare_map_layout(data):
+    """Check a redesigned map. Returns (record data, error message)."""
+    levels = data.get("levels")
+    if not isinstance(levels, list) or not 1 <= len(levels) <= MAX_MAP_LEVELS:
+        return None, f"Maps need 1 to {MAX_MAP_LEVELS} levels."
+
+    name_error = f"Level and room names must be 1 to {MAX_MAP_NAME_LENGTH} characters."
+    shape_error = "A room doesn't fit on the map."
+    seen_ids = set()
+    prepared_levels = []
+    for level in levels:
+        if not isinstance(level, dict) or not is_new_map_id(level.get("id"), seen_ids):
+            return None, "A level on this map isn't valid."
+        level_name = clean_text(level.get("name"))
+        if not level_name or len(level_name) > MAX_MAP_NAME_LENGTH:
+            return None, name_error
+        rooms = level.get("rooms")
+        if not isinstance(rooms, list) or len(rooms) > MAX_MAP_ROOMS_PER_LEVEL:
+            return None, f"Levels can have up to {MAX_MAP_ROOMS_PER_LEVEL} rooms."
+
+        prepared_rooms = []
+        for room in rooms:
+            if not isinstance(room, dict) or not is_new_map_id(room.get("id"), seen_ids):
+                return None, "A room on this map isn't valid."
+            room_name = clean_text(room.get("name"))
+            if not room_name or len(room_name) > MAX_MAP_NAME_LENGTH:
+                return None, name_error
+            if not is_valid_map_room_shape(room):
+                return None, shape_error
+            prepared_rooms.append(
+                {"id": room["id"], "name": room_name, **{key: room[key] for key in "xywh"}}
+            )
+        prepared_levels.append({"id": level["id"], "name": level_name, "rooms": prepared_rooms})
+    return {"type": "map_layout", "levels": prepared_levels}, None
+
+
 def prepare_record(data, user):
     """Check a record from the browser. Returns (record data, error message)."""
     kind = data.get("type")
     if kind == "checklist":
         return data, None
+
+    if kind == "map_layout":
+        return prepare_map_layout(data)
+
+    if kind == "map_status":
+        room_id = data.get("room_id")
+        if not isinstance(room_id, str) or not re.fullmatch(MAP_ID_PATTERN, room_id):
+            return None, "Choose a room."
+        status = data.get("status")
+        if status not in MAP_STATUSES:
+            return None, "Choose a valid status."
+        return {"type": "map_status", "room_id": room_id, "status": status}, None
 
     if kind == "checklist_template":
         name = clean_text(data.get("name"))
@@ -436,7 +516,7 @@ def is_visible(record, user_id, taken_down, deleted_messages, resolved_sos):
         )
     if kind == "notice":
         return record["id"] not in taken_down
-    return kind in ("checklist", "checklist_template", "sos_phone")
+    return kind in ("checklist", "checklist_template", "sos_phone", "map_layout", "map_status")
 
 
 class AccountError(Exception):

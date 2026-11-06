@@ -31,6 +31,13 @@
   --tag-reminder: #fbbf24;
   --tag-general: #7dd3fc;
   --tag-text: #10151c;
+  /* Map status colours stay the same in every tone, so they always mean the same thing. */
+  --map-unchecked: #fbbf24;
+  --map-safe: #4ade80;
+  --map-na: #aeb4bb;
+  --map-dangerous: #d32f2f;
+  --map-status-text: #10151c;
+  --map-dangerous-text: #ffffff;
 
   --ui-scale: 1;
 }
@@ -932,6 +939,218 @@ ul {
 
 .check-note {
   display: block;
+  margin-top: 0.5rem;
+}
+
+[data-room-status="unchecked"] {
+  --status-colour: var(--map-unchecked);
+  --status-text: var(--map-status-text);
+}
+
+[data-room-status="safe"] {
+  --status-colour: var(--map-safe);
+  --status-text: var(--map-status-text);
+}
+
+[data-room-status="na"] {
+  --status-colour: var(--map-na);
+  --status-text: var(--map-status-text);
+}
+
+[data-room-status="dangerous"] {
+  --status-colour: var(--map-dangerous);
+  --status-text: var(--map-dangerous-text);
+}
+
+.map-levels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.map-levels button {
+  overflow-wrap: anywhere;
+}
+
+.map-levels button[aria-pressed="true"] {
+  border-color: var(--link);
+  font-weight: 600;
+}
+
+.map-levels button[data-dangerous="true"] {
+  border: 2px solid var(--map-dangerous);
+}
+
+.map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0 0 0.75rem;
+}
+
+.map-legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.map-swatch {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 3px;
+  background: var(--status-colour);
+}
+
+/*
+  Small screens scroll sideways, so room labels stay big enough to read.
+  Short screens get a narrower map, so a whole level fits on screen while dragging rooms.
+*/
+.map-scroll {
+  max-width: min(60rem, calc((100vh - 6rem) * 1.5));
+  max-width: min(60rem, calc((100dvh - 6rem) * 1.5));
+  overflow-x: auto;
+}
+
+.map-floor {
+  position: relative;
+  min-width: 36rem;
+  aspect-ratio: 24 / 16;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background-color: var(--surface);
+  /* Selected text would start the browser's own drag and cancel moving a room. */
+  user-select: none;
+}
+
+.map-floor[data-editing="true"] {
+  background-image:
+    linear-gradient(to right, var(--border) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+  background-size: calc(100% / 24) calc(100% / 16);
+}
+
+.map-room {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 0;
+  padding: 0.125rem 0.25rem;
+  overflow: hidden;
+  border: 2px solid var(--surface);
+  border-radius: 6px;
+  background: var(--status-colour);
+  color: var(--status-text);
+  font-size: 0.875rem;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.map-room:hover {
+  background: var(--status-colour);
+}
+
+/* Only the border changes, so the label's contrast stays the same. Touch screens would keep it after a tap. */
+@media (hover: hover) {
+  .map-room:hover {
+    border-color: var(--text);
+  }
+}
+
+.map-room[aria-pressed="true"] {
+  border-color: var(--text);
+  outline: 2px solid var(--link);
+  outline-offset: -4px;
+}
+
+.map-floor[data-editing="true"] .map-room {
+  cursor: move;
+  /* Lets a finger drag the room instead of scrolling the page. */
+  touch-action: none;
+}
+
+.map-room-name {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.map-room-status {
+  flex: none;
+  font-size: 0.8125rem;
+}
+
+.map-room[data-room-status="dangerous"] .map-room-status {
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.map-room-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 1.5rem;
+  height: 1.5rem;
+  background: linear-gradient(135deg, transparent 50%, var(--status-text) 50%);
+  cursor: nwse-resize;
+}
+
+.map-room-panel {
+  max-width: 60rem;
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.map-room-panel h3 {
+  margin: 0 0 0.5rem;
+}
+
+.map-room-panel p {
+  margin: 0.5rem 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.map-status-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.map-status-buttons button {
+  border: 2px solid var(--status-colour);
+}
+
+.map-status-buttons button[aria-pressed="true"],
+.map-status-buttons button[aria-pressed="true"]:hover {
+  background: var(--status-colour);
+  color: var(--status-text);
+  font-weight: 700;
+}
+
+.map-editor {
+  max-width: 60rem;
+  margin-top: 0.75rem;
+}
+
+.map-editor fieldset {
+  margin: 0 0 0.75rem;
+}
+
+.map-editor label {
+  display: block;
+  margin: 0.5rem 0 0.25rem;
+}
+
+.map-editor .editor-actions {
   margin-top: 0.5rem;
 }
 

@@ -32,6 +32,41 @@ const SAFETY_ACTIVITY_SAVE_MS = 5000;
 const AUTOMATIC_SOS_REASON = "You didn't respond to 2 safety checks, so SecuriLock sent this for you. ";
 const NOTIFICATIONS_BLOCKED_TEXT =
   "Notifications are blocked. To turn them on, allow them for this site in your browser's settings.";
+const MAP_STATUSES = { unchecked: "Unchecked", safe: "Safe", na: "NA", dangerous: "Dangerous" };
+// The grid and limits match the checks in app.py.
+const MAP_COLUMNS = 24;
+const MAP_ROWS = 16;
+const MIN_MAP_ROOM_WIDTH = 3;
+const MIN_MAP_ROOM_HEIGHT = 2;
+const MAX_MAP_LEVELS = 20;
+const MAX_MAP_ROOMS_PER_LEVEL = 60;
+// Used until someone saves their own version with the Redesign map button.
+const DEFAULT_MAP_LEVELS = [
+  {
+    id: "default-level-1",
+    name: "Level 1",
+    rooms: [
+      { id: "default-lobby", name: "Lobby", x: 0, y: 0, w: 10, h: 8 },
+      { id: "default-office-101", name: "Office 101", x: 10, y: 0, w: 7, h: 5 },
+      { id: "default-office-102", name: "Office 102", x: 17, y: 0, w: 7, h: 5 },
+      { id: "default-corridor-1", name: "Corridor", x: 10, y: 5, w: 14, h: 3 },
+      { id: "default-storeroom", name: "Storeroom", x: 0, y: 8, w: 10, h: 8 },
+      { id: "default-meeting-room", name: "Meeting room", x: 10, y: 8, w: 9, h: 8 },
+      { id: "default-stairs-1", name: "Stairs", x: 19, y: 8, w: 5, h: 8 },
+    ],
+  },
+  {
+    id: "default-level-2",
+    name: "Level 2",
+    rooms: [
+      { id: "default-office-201", name: "Office 201", x: 0, y: 0, w: 12, h: 6 },
+      { id: "default-office-202", name: "Office 202", x: 12, y: 0, w: 12, h: 6 },
+      { id: "default-corridor-2", name: "Corridor", x: 0, y: 6, w: 24, h: 3 },
+      { id: "default-pantry", name: "Pantry", x: 0, y: 9, w: 12, h: 7 },
+      { id: "default-stairs-2", name: "Stairs", x: 19, y: 9, w: 5, h: 7 },
+    ],
+  },
+];
 
 const tabs = [...document.querySelectorAll(".tab")];
 const statusElement = document.getElementById("status");
@@ -91,6 +126,19 @@ const checklistEditor = document.getElementById("checklist-editor");
 const editorName = document.getElementById("editor-name");
 const editorTaskList = document.getElementById("editor-task-list");
 const editorError = document.getElementById("editor-error");
+// A server started before an update still sends the older page, without the map.
+const mapFloor = document.getElementById("map-floor");
+const mapLevelButtons = document.getElementById("map-levels");
+const mapLegend = document.getElementById("map-legend");
+const mapEmpty = document.getElementById("map-empty");
+const mapError = document.getElementById("map-error");
+const mapEditButton = document.getElementById("map-edit");
+const mapRoomPanel = document.getElementById("map-room-panel");
+const mapStatusButtons = document.getElementById("map-status-buttons");
+const mapEditor = document.getElementById("map-editor");
+const mapLevelName = document.getElementById("map-level-name");
+const mapRoomFields = document.getElementById("map-room-fields");
+const mapRoomName = document.getElementById("map-room-name");
 
 const currentUserId = document.body.dataset.userId;
 const currentUserIsAdmin = document.body.dataset.isAdmin === "true";
@@ -112,6 +160,15 @@ let safetySosRetryAt = 0;
 let activeSos = [];
 let renderedSos = "";
 let sosPanelView = null;
+let mapLevels = DEFAULT_MAP_LEVELS;
+let mapLayoutId = null;
+let mapStatuses = new Map();
+let mapLevelId = null;
+let mapSelectedRoomId = null;
+// A private copy while redesigning, so nobody sees the map until it's saved.
+let mapDraft = null;
+let mapDraftBaseId = null;
+let renderedMap = "";
 const defaultSosPhone = document.body.dataset.sosPhone;
 let sosPhone = defaultSosPhone;
 const currentUserName = document.body.dataset.userName;
@@ -738,6 +795,7 @@ async function refreshRecords() {
 
   // Records are sorted oldest first, so the last version is the current one.
   showChecklist(checklistVersions.at(-1)?.data ?? DEFAULT_CHECKLIST);
+  updateMap(records);
   const latestSosPhone = records.filter((r) => r.data.type === "sos_phone").at(-1);
   const currentSosPhone = latestSosPhone ? latestSosPhone.data.phone : defaultSosPhone;
   if (currentSosPhone !== sosPhone) {
@@ -1532,6 +1590,476 @@ checklistEditor.addEventListener("submit", async (event) => {
     editorError.textContent = "Couldn't save the checklist. Please try again.";
   }
 });
+
+function updateMap(records) {
+  if (!mapFloor) {
+    return;
+  }
+  // Records are sorted oldest first, so the last layout and each room's last status are current.
+  const layout = records.filter((r) => r.data.type === "map_layout").at(-1);
+  mapLevels = layout?.data.levels ?? DEFAULT_MAP_LEVELS;
+  mapLayoutId = layout?.id ?? null;
+  mapStatuses = new Map(
+    records.filter((r) => r.data.type === "map_status").map((r) => [r.data.room_id, r])
+  );
+  // Waits while redesigning, because rebuilding the rooms would interrupt a drag.
+  if (!mapDraft) {
+    renderMap();
+  }
+}
+
+function getMapRoomStatus(roomId) {
+  return mapStatuses.get(roomId)?.data.status ?? "unchecked";
+}
+
+function getMapLevel() {
+  const levels = mapDraft ?? mapLevels;
+  return levels.find((level) => level.id === mapLevelId) ?? levels[0];
+}
+
+function countDangerousRooms(level) {
+  return level.rooms.filter((room) => getMapRoomStatus(room.id) === "dangerous").length;
+}
+
+function placeMapRoom(element, room) {
+  element.style.left = `${(room.x / MAP_COLUMNS) * 100}%`;
+  element.style.top = `${(room.y / MAP_ROWS) * 100}%`;
+  element.style.width = `${(room.w / MAP_COLUMNS) * 100}%`;
+  element.style.height = `${(room.h / MAP_ROWS) * 100}%`;
+}
+
+function fitsOnMap(shape, roomId, rooms) {
+  return (
+    shape.x >= 0 &&
+    shape.y >= 0 &&
+    shape.w >= MIN_MAP_ROOM_WIDTH &&
+    shape.h >= MIN_MAP_ROOM_HEIGHT &&
+    shape.x + shape.w <= MAP_COLUMNS &&
+    shape.y + shape.h <= MAP_ROWS &&
+    rooms.every(
+      (other) =>
+        other.id === roomId ||
+        shape.x + shape.w <= other.x ||
+        other.x + other.w <= shape.x ||
+        shape.y + shape.h <= other.y ||
+        other.y + other.h <= shape.y
+    )
+  );
+}
+
+// Rooms stop at the last spot that fits, so they can't overlap or leave the map.
+function reshapeMapRoom(element, room, shape) {
+  if (fitsOnMap(shape, room.id, getMapLevel().rooms)) {
+    Object.assign(room, shape);
+    placeMapRoom(element, room);
+  }
+}
+
+function startMapRoomDrag(event, element, room, resizeHandle) {
+  if (event.button !== 0) {
+    return;
+  }
+  selectDraftRoom(room.id);
+  const handleBox = resizeHandle.getBoundingClientRect();
+  const isResizing = event.clientX >= handleBox.left && event.clientY >= handleBox.top;
+  const startX = event.clientX;
+  const startY = event.clientY;
+  const start = { x: room.x, y: room.y, w: room.w, h: room.h };
+  element.setPointerCapture(event.pointerId);
+
+  const onMove = (moveEvent) => {
+    const floor = mapFloor.getBoundingClientRect();
+    const columns = Math.round((moveEvent.clientX - startX) / (floor.width / MAP_COLUMNS));
+    const rows = Math.round((moveEvent.clientY - startY) / (floor.height / MAP_ROWS));
+    // A fast drag can jump past the edge, so it stops at the edge instead of not moving at all.
+    const limit = (value, lowest, highest) => Math.min(Math.max(value, lowest), highest);
+    reshapeMapRoom(
+      element,
+      room,
+      isResizing
+        ? {
+            ...start,
+            w: limit(start.w + columns, MIN_MAP_ROOM_WIDTH, MAP_COLUMNS - start.x),
+            h: limit(start.h + rows, MIN_MAP_ROOM_HEIGHT, MAP_ROWS - start.y),
+          }
+        : {
+            ...start,
+            x: limit(start.x + columns, 0, MAP_COLUMNS - start.w),
+            y: limit(start.y + rows, 0, MAP_ROWS - start.h),
+          }
+    );
+  };
+  const onEnd = () => {
+    element.removeEventListener("pointermove", onMove);
+    element.removeEventListener("pointerup", onEnd);
+    element.removeEventListener("pointercancel", onEnd);
+  };
+  element.addEventListener("pointermove", onMove);
+  element.addEventListener("pointerup", onEnd);
+  element.addEventListener("pointercancel", onEnd);
+}
+
+function handleMapRoomKey(event, element, room) {
+  const steps = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  const step = steps[event.key];
+  if (!step) {
+    return;
+  }
+  event.preventDefault();
+  const shape = { x: room.x, y: room.y, w: room.w, h: room.h };
+  if (event.shiftKey) {
+    shape.w += step[0];
+    shape.h += step[1];
+  } else {
+    shape.x += step[0];
+    shape.y += step[1];
+  }
+  reshapeMapRoom(element, room, shape);
+}
+
+function createMapRoom(room) {
+  const status = getMapRoomStatus(room.id);
+  const element = document.createElement("button");
+  element.type = "button";
+  element.className = "map-room";
+  element.dataset.roomStatus = status;
+  element.dataset.roomId = room.id;
+  element.dataset.mapFocus = `room-${room.id}`;
+  element.title = room.name;
+  element.setAttribute("aria-label", `${room.name}: ${MAP_STATUSES[status]}`);
+  element.setAttribute("aria-pressed", String(room.id === mapSelectedRoomId));
+  placeMapRoom(element, room);
+
+  const name = document.createElement("span");
+  name.className = "map-room-name";
+  name.textContent = room.name;
+  const label = document.createElement("span");
+  label.className = "map-room-status";
+  label.textContent = MAP_STATUSES[status];
+  element.append(name, label);
+
+  if (mapDraft) {
+    const resizeHandle = document.createElement("span");
+    resizeHandle.className = "map-room-resize";
+    element.append(resizeHandle);
+    element.addEventListener("pointerdown", (event) =>
+      startMapRoomDrag(event, element, room, resizeHandle)
+    );
+    element.addEventListener("focus", () => selectDraftRoom(room.id));
+    element.addEventListener("keydown", (event) => handleMapRoomKey(event, element, room));
+  } else {
+    element.addEventListener("click", () => {
+      mapSelectedRoomId = room.id;
+      renderMap();
+      mapRoomPanel.scrollIntoView({ block: "nearest" });
+    });
+  }
+  return element;
+}
+
+function createMapLevelButton(level) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.dataset.mapFocus = `level-${level.id}`;
+  button.setAttribute("aria-pressed", String(level.id === mapLevelId));
+  // A danger on another level must be visible without opening that level.
+  const dangerous = mapDraft ? 0 : countDangerousRooms(level);
+  button.dataset.dangerous = String(dangerous > 0);
+  button.textContent = dangerous > 0 ? `${level.name} · ${dangerous} dangerous` : level.name;
+  button.addEventListener("click", () => {
+    mapLevelId = level.id;
+    mapSelectedRoomId = null;
+    mapError.textContent = "";
+    renderMap();
+  });
+  return button;
+}
+
+function renderMapLegend(level) {
+  const counts = Object.fromEntries(Object.keys(MAP_STATUSES).map((status) => [status, 0]));
+  for (const room of level.rooms) {
+    counts[getMapRoomStatus(room.id)] += 1;
+  }
+  mapLegend.replaceChildren(
+    ...Object.entries(MAP_STATUSES).map(([status, label]) => {
+      const swatch = document.createElement("span");
+      swatch.className = "map-swatch";
+      const item = document.createElement("li");
+      item.dataset.roomStatus = status;
+      item.append(swatch, `${label}: ${counts[status]}`);
+      return item;
+    })
+  );
+}
+
+function renderMapRoomPanel(room) {
+  mapRoomPanel.hidden = !room;
+  if (!room) {
+    return;
+  }
+  document.getElementById("map-room-title").textContent = room.name;
+  const current = getMapRoomStatus(room.id);
+  mapStatusButtons.replaceChildren(
+    ...Object.entries(MAP_STATUSES).map(([status, label]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.dataset.roomStatus = status;
+      button.dataset.mapFocus = `status-${status}`;
+      button.setAttribute("aria-pressed", String(status === current));
+      button.addEventListener("click", () => setMapRoomStatus(room.id, status));
+      return button;
+    })
+  );
+  const record = mapStatuses.get(room.id);
+  document.getElementById("map-room-meta").textContent = record
+    ? `Marked ${MAP_STATUSES[current]} by ${record.data.sender_name} · ${formatTime(record.created_at)} · ${record.synced ? "Synced" : "Pending upload"}`
+    : "Nobody has checked this room yet.";
+}
+
+function setInputValue(input, value) {
+  // Don't fight someone who is typing in this box.
+  if (input.value !== value) {
+    input.value = value;
+  }
+}
+
+function renderMapEditor(level, room) {
+  setInputValue(mapLevelName, level.name);
+  const index = mapDraft.indexOf(level);
+  document.getElementById("map-level-earlier").disabled = index === 0;
+  document.getElementById("map-level-later").disabled = index === mapDraft.length - 1;
+  document.getElementById("map-delete-level").disabled = mapDraft.length === 1;
+  mapRoomFields.hidden = !room;
+  if (room) {
+    setInputValue(mapRoomName, room.name);
+  }
+}
+
+function renderMap() {
+  if (!mapFloor) {
+    return;
+  }
+  const editing = mapDraft !== null;
+  const levels = mapDraft ?? mapLevels;
+  const level = getMapLevel();
+  mapLevelId = level.id;
+  const room = level.rooms.find((candidate) => candidate.id === mapSelectedRoomId) ?? null;
+  mapSelectedRoomId = room?.id ?? null;
+
+  // Rebuilding only on a real change keeps focus and any selected text in place.
+  const snapshot = JSON.stringify([
+    editing,
+    levels,
+    mapLevelId,
+    mapSelectedRoomId,
+    [...mapStatuses.values()].map((record) => [record.id, record.synced]),
+  ]);
+  if (snapshot === renderedMap) {
+    return;
+  }
+  renderedMap = snapshot;
+
+  const focused = document.activeElement?.dataset?.mapFocus;
+  mapLevelButtons.replaceChildren(...levels.map(createMapLevelButton));
+  mapFloor.replaceChildren(...level.rooms.map(createMapRoom));
+  mapFloor.dataset.editing = String(editing);
+  mapEmpty.hidden = level.rooms.length > 0;
+  mapEditButton.hidden = editing;
+  mapLegend.hidden = editing;
+  mapEditor.hidden = !editing;
+  renderMapLegend(level);
+  renderMapRoomPanel(editing ? null : room);
+  if (editing) {
+    renderMapEditor(level, room);
+  }
+  if (focused) {
+    document.querySelector(`[data-map-focus="${focused}"]`)?.focus();
+  }
+}
+
+async function setMapRoomStatus(roomId, status) {
+  if (getMapRoomStatus(roomId) === status) {
+    return;
+  }
+  mapError.textContent = "";
+  try {
+    await saveRecord({ type: "map_status", room_id: roomId, status });
+  } catch (error) {
+    console.warn(error);
+    mapError.textContent = error.userMessage ?? "Couldn't save the room's status. Please try again.";
+  }
+}
+
+// Doesn't rebuild the rooms, because that would interrupt a drag that's just starting.
+function selectDraftRoom(roomId) {
+  mapSelectedRoomId = roomId;
+  for (const element of mapFloor.querySelectorAll(".map-room")) {
+    element.setAttribute("aria-pressed", String(element.dataset.roomId === roomId));
+  }
+  const level = getMapLevel();
+  renderMapEditor(level, level.rooms.find((room) => room.id === roomId));
+}
+
+function createMapId(prefix) {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function findFreeMapSpot(rooms) {
+  for (const [w, h] of [[5, 3], [MIN_MAP_ROOM_WIDTH, MIN_MAP_ROOM_HEIGHT]]) {
+    for (let y = 0; y + h <= MAP_ROWS; y += 1) {
+      for (let x = 0; x + w <= MAP_COLUMNS; x += 1) {
+        if (fitsOnMap({ x, y, w, h }, null, rooms)) {
+          return { x, y, w, h };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function moveDraftLevel(offset) {
+  const index = mapDraft.indexOf(getMapLevel());
+  const [level] = mapDraft.splice(index, 1);
+  mapDraft.splice(index + offset, 0, level);
+  renderMap();
+}
+
+// Returns true if every level and room has a name, otherwise shows the first one without.
+function checkDraftNames() {
+  for (const level of mapDraft) {
+    level.name = level.name.trim();
+    if (!level.name) {
+      mapLevelId = level.id;
+      mapSelectedRoomId = null;
+      mapError.textContent = "Give this level a name.";
+      renderMap();
+      mapLevelName.focus();
+      return false;
+    }
+    for (const room of level.rooms) {
+      room.name = room.name.trim();
+      if (!room.name) {
+        mapLevelId = level.id;
+        mapSelectedRoomId = room.id;
+        mapError.textContent = "Give this room a name.";
+        renderMap();
+        mapRoomName.focus();
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function closeMapEditor() {
+  mapDraft = null;
+  mapSelectedRoomId = null;
+  mapError.textContent = "";
+  renderMap();
+}
+
+if (mapFloor) {
+  // Text selected elsewhere on the page can still start the browser's own drag from a room.
+  mapFloor.addEventListener("dragstart", (event) => event.preventDefault());
+  mapEditButton.addEventListener("click", () => {
+    mapDraft = structuredClone(mapLevels);
+    mapDraftBaseId = mapLayoutId;
+    mapSelectedRoomId = null;
+    mapError.textContent = "";
+    renderMap();
+    mapLevelName.focus();
+  });
+  document.getElementById("map-room-close").addEventListener("click", () => {
+    mapSelectedRoomId = null;
+    renderMap();
+  });
+  document.getElementById("map-editor-cancel").addEventListener("click", closeMapEditor);
+
+  mapLevelName.addEventListener("input", () => {
+    getMapLevel().name = mapLevelName.value;
+    renderMap();
+  });
+  mapRoomName.addEventListener("input", () => {
+    getMapLevel().rooms.find((room) => room.id === mapSelectedRoomId).name = mapRoomName.value;
+    renderMap();
+  });
+  // Enter in a name box shouldn't save the whole map by accident.
+  mapEditor.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && event.target.matches("input")) {
+      event.preventDefault();
+    }
+  });
+
+  document.getElementById("map-add-level").addEventListener("click", () => {
+    if (mapDraft.length >= MAX_MAP_LEVELS) {
+      mapError.textContent = `Maps can have up to ${MAX_MAP_LEVELS} levels.`;
+      return;
+    }
+    mapError.textContent = "";
+    const level = { id: createMapId("level"), name: `Level ${mapDraft.length + 1}`, rooms: [] };
+    mapDraft.push(level);
+    mapLevelId = level.id;
+    mapSelectedRoomId = null;
+    renderMap();
+    mapLevelName.select();
+  });
+  document.getElementById("map-level-earlier").addEventListener("click", () => moveDraftLevel(-1));
+  document.getElementById("map-level-later").addEventListener("click", () => moveDraftLevel(1));
+  document.getElementById("map-delete-level").addEventListener("click", () => {
+    const level = getMapLevel();
+    if (!window.confirm(`Delete ${level.name} and any rooms on it?`)) {
+      return;
+    }
+    mapDraft.splice(mapDraft.indexOf(level), 1);
+    mapSelectedRoomId = null;
+    renderMap();
+  });
+
+  document.getElementById("map-add-room").addEventListener("click", () => {
+    const level = getMapLevel();
+    const spot = level.rooms.length < MAX_MAP_ROOMS_PER_LEVEL ? findFreeMapSpot(level.rooms) : null;
+    if (!spot) {
+      mapError.textContent = "There's no space for another room. Move, shrink or delete one first.";
+      return;
+    }
+    mapError.textContent = "";
+    const room = { id: createMapId("room"), name: `Room ${level.rooms.length + 1}`, ...spot };
+    level.rooms.push(room);
+    mapSelectedRoomId = room.id;
+    renderMap();
+    mapRoomName.select();
+  });
+  document.getElementById("map-delete-room").addEventListener("click", () => {
+    const level = getMapLevel();
+    level.rooms = level.rooms.filter((room) => room.id !== mapSelectedRoomId);
+    mapSelectedRoomId = null;
+    renderMap();
+  });
+
+  mapEditor.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!checkDraftNames()) {
+      return;
+    }
+    if (
+      mapLayoutId !== mapDraftBaseId &&
+      !window.confirm("Someone else changed the map while you were editing. Replace their version with yours?")
+    ) {
+      return;
+    }
+    mapError.textContent = "";
+    try {
+      await saveRecord({ type: "map_layout", levels: mapDraft });
+      closeMapEditor();
+    } catch (error) {
+      console.warn(error);
+      mapError.textContent = error.userMessage ?? "Couldn't save the map. Please try again.";
+    }
+  });
+
+  renderMap();
+}
 
 window.addEventListener("online", refreshStatus);
 window.addEventListener("offline", refreshStatus);
