@@ -10,6 +10,9 @@ const CHECKLIST = {
 };
 const RESULTS = ["Pass", "Fail", "N/A"];
 const STATUS_CHECK_MS = 30000;
+const MESSAGE_CHECK_MS = 5000;
+const DEVICE_ID_KEY = "bits-device-id";
+const SCROLL_END_MARGIN_PX = 60;
 
 const tabs = [...document.querySelectorAll(".tab")];
 const statusElement = document.getElementById("status");
@@ -17,9 +20,31 @@ const statusText = document.getElementById("status-text");
 const messageForm = document.getElementById("message-form");
 const messageInput = document.getElementById("message-text");
 const messageError = document.getElementById("message-error");
+const messageChat = document.getElementById("message-chat");
+const messageList = document.getElementById("message-list");
+const messagePanel = document.getElementById("panel-message");
 const checklistForm = document.getElementById("checklist-form");
 const checklistItems = document.getElementById("checklist-items");
 const checklistError = document.getElementById("checklist-error");
+
+// With no login yet, this anonymous ID is how a browser recognises its own messages.
+function getDeviceId() {
+  const createId = () =>
+    crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    let id = localStorage.getItem(DEVICE_ID_KEY);
+    if (!id) {
+      id = createId();
+      localStorage.setItem(DEVICE_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    return createId();
+  }
+}
+
+const deviceId = getDeviceId();
+let renderedMessages = "";
 
 async function requestJson(path, options) {
   const response = await fetch(path, options);
@@ -36,6 +61,13 @@ function selectTab(tab) {
     candidate.tabIndex = isSelected ? 0 : -1;
     document.getElementById(candidate.getAttribute("aria-controls")).hidden = !isSelected;
   }
+  if (!messagePanel.hidden) {
+    scrollChatToEnd();
+  }
+}
+
+function scrollChatToEnd() {
+  messageChat.scrollTop = messageChat.scrollHeight;
 }
 
 function formatTime(isoTime) {
@@ -71,6 +103,83 @@ function showList(listId, emptyId, items) {
   document.getElementById(emptyId).hidden = items.length > 0;
 }
 
+function formatDateLabel(date) {
+  const startOfDay = (day) => new Date(day.getFullYear(), day.getMonth(), day.getDate());
+  const daysAgo = Math.round((startOfDay(new Date()) - startOfDay(date)) / 86400000);
+  if (daysAgo === 0) {
+    return "Today";
+  }
+  if (daysAgo === 1) {
+    return "Yesterday";
+  }
+  return date.toLocaleDateString([], { dateStyle: "medium" });
+}
+
+function createMessageBubble(record) {
+  const isSent = record.data.sender === deviceId;
+  const bubble = document.createElement("li");
+  bubble.className = `message ${isSent ? "message-sent" : "message-received"}`;
+
+  const text = document.createElement("p");
+  text.textContent = record.data.text ?? record.data.note;
+
+  const meta = document.createElement("p");
+  meta.className = "message-meta";
+  const time = new Date(record.created_at).toLocaleTimeString([], { timeStyle: "short" });
+  if (!record.synced) {
+    meta.textContent = `${time} · Pending upload`;
+  } else if (isSent) {
+    meta.textContent = `${time} `;
+    const tick = document.createElement("span");
+    tick.textContent = "✓";
+    tick.title = "Synced";
+    tick.setAttribute("role", "img");
+    tick.setAttribute("aria-label", "Synced");
+    meta.append(tick);
+  } else {
+    meta.textContent = time;
+  }
+
+  bubble.append(text, meta);
+  return bubble;
+}
+
+function renderMessages(messages) {
+  // Rebuilding only on a real change keeps any text the officer has selected.
+  const snapshot = JSON.stringify([
+    new Date().toDateString(),
+    messages.map((record) => [record.id, record.synced]),
+  ]);
+  if (snapshot === renderedMessages) {
+    return;
+  }
+  renderedMessages = snapshot;
+
+  const distanceFromEnd =
+    messageChat.scrollHeight - messageChat.scrollTop - messageChat.clientHeight;
+
+  const items = [];
+  let currentLabel = null;
+  for (const record of messages) {
+    const label = formatDateLabel(new Date(record.created_at));
+    if (label !== currentLabel) {
+      const separator = document.createElement("li");
+      separator.className = "date-separator";
+      separator.textContent = label;
+      items.push(separator);
+      currentLabel = label;
+    }
+    items.push(createMessageBubble(record));
+  }
+  messageList.replaceChildren(...items);
+  document.getElementById("message-empty").hidden = messages.length > 0;
+
+  // Stay put if the officer has scrolled up to read older messages.
+  if (distanceFromEnd <= SCROLL_END_MARGIN_PX) {
+    scrollChatToEnd();
+  }
+}
+
 function describeInspection(record) {
   const results = record.data.results;
   const failures = results.filter((entry) => entry.result === "Fail");
@@ -81,17 +190,13 @@ function describeInspection(record) {
 
 async function refreshRecords() {
   const records = await requestJson("/api/records");
-  records.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  records.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
   // The "note" check keeps records saved by the first version of the page visible.
   const messages = records.filter((r) => r.data.type === "message" || r.data.note);
-  const inspections = records.filter((r) => r.data.type === "checklist");
+  const inspections = records.filter((r) => r.data.type === "checklist").reverse();
 
-  showList(
-    "message-list",
-    "message-empty",
-    messages.map((record) => createRecordItem(record.data.text ?? record.data.note, record))
-  );
+  renderMessages(messages);
   showList("inspection-list", "inspection-empty", inspections.map(describeInspection));
 }
 
@@ -207,8 +312,10 @@ messageForm.addEventListener("submit", async (event) => {
   }
   messageError.textContent = "";
   try {
-    await saveRecord({ type: "message", text });
+    await saveRecord({ type: "message", text, sender: deviceId });
     messageForm.reset();
+    messageInput.focus();
+    scrollChatToEnd();
   } catch (error) {
     console.warn(error);
     messageError.textContent = "Couldn't save your message. Please try again.";
@@ -237,6 +344,11 @@ checklistForm.addEventListener("submit", async (event) => {
 window.addEventListener("online", refreshStatus);
 window.addEventListener("offline", refreshStatus);
 setInterval(refreshStatus, STATUS_CHECK_MS);
+setInterval(() => {
+  if (!messagePanel.hidden && !document.hidden) {
+    refreshRecords().catch(console.warn);
+  }
+}, MESSAGE_CHECK_MS);
 
 buildChecklist();
 refreshStatus();

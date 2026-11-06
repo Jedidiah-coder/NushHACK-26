@@ -30,12 +30,14 @@
 
     <section id="panel-message" role="tabpanel" aria-labelledby="tab-message" hidden>
       <h2>Messages</h2>
-      <ul class="record-list" id="message-list"></ul>
-      <p id="message-empty">No messages yet.</p>
+      <div class="chat" id="message-chat" role="log" aria-label="Message history" tabindex="0">
+        <p class="chat-empty" id="message-empty">No messages yet.</p>
+        <ul class="chat-messages" id="message-list"></ul>
+      </div>
       <form id="message-form">
-        <label for="message-text">New message</label>
+        <label class="visually-hidden" for="message-text">New message</label>
         <div class="message-row">
-          <input id="message-text" type="text" maxlength="500" autocomplete="off" required>
+          <input id="message-text" type="text" maxlength="500" autocomplete="off" placeholder="Type a message" required>
           <button type="submit">Send</button>
         </div>
         <p class="form-error" id="message-error" role="alert"></p>

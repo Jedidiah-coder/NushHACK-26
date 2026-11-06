@@ -83,9 +83,78 @@ ul {
   font-weight: 600;
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.chat {
+  height: calc(100vh - 290px);
+  height: calc(100dvh - 290px);
+  min-height: 240px;
+  padding: 8px;
+  overflow-y: auto;
+  border: 1px solid #dddddd;
+  background: #f0f0f0;
+}
+
+.chat-empty {
+  margin: 8px 0;
+  color: #595959;
+  text-align: center;
+}
+
+.chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+
+.message {
+  max-width: 80%;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+
+.message p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.message-sent {
+  align-self: flex-end;
+  background: #d9f5d6;
+}
+
+.message-received {
+  align-self: flex-start;
+  background: #ffffff;
+}
+
+.message .message-meta {
+  color: #595959;
+  font-size: 0.75rem;
+  text-align: right;
+}
+
+.date-separator {
+  align-self: center;
+  margin: 6px 0;
+  padding: 2px 10px;
+  border-radius: 8px;
+  background: #dddddd;
+  font-size: 0.8125rem;
+}
+
 .message-row {
   display: flex;
   gap: 8px;
+  margin-top: 8px;
 }
 
 .form-error {
