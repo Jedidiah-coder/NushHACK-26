@@ -749,8 +749,8 @@ def take_down_notice(notice_id):
     )
     if notice is None:
         return jsonify(error="Notice not found."), 404
-    if notice["data"].get("sender_id") != user["id"]:
-        return jsonify(error="Only the author can take down a notice."), 403
+    if notice["data"].get("sender_id") != user["id"] and user["rank"] != "admin":
+        return jsonify(error="Only the author or an admin can take down a notice."), 403
 
     if notice_id not in find_taken_down_notices(records):
         # A new record, not an edit, so this works offline and always reaches Supabase.
