@@ -455,7 +455,7 @@ function showNotification(title, body, tag, openRecord, stayOpen = false) {
     const notification = new Notification(title, {
       body,
       tag,
-      icon: "/static/favicon.svg",
+      icon: "/static/favicon.png",
       requireInteraction: stayOpen,
     });
     notification.onclick = () => {
@@ -1020,8 +1020,23 @@ sosClose.addEventListener("click", () => {
   renderSosPanel();
 });
 
+function showNotificationMessage(text) {
+  notificationText.textContent = text;
+  settingsNotificationText.textContent = text;
+}
+
 async function requestNotifications() {
-  const permission = await Notification.requestPermission();
+  // Browsers may only show a small icon by the address bar, so say where to look.
+  showNotificationMessage(
+    "Look for a notification request at the top of your browser, near the address bar, and choose Allow."
+  );
+  let permission = "default";
+  try {
+    permission = await Notification.requestPermission();
+  } catch (error) {
+    console.warn(error);
+  }
+
   if (permission === "denied") {
     notificationText.textContent = NOTIFICATIONS_BLOCKED_TEXT;
     notificationEnable.hidden = true;
@@ -1029,7 +1044,15 @@ async function requestNotifications() {
     updateNotificationSettings();
     return;
   }
+  if (permission === "default") {
+    // Browsers stop asking after a request has been closed a few times.
+    showNotificationMessage(
+      "Notifications are still off. Click the icon to the left of the address bar, allow notifications for this site, then reload the page."
+    );
+    return;
+  }
   updateNotificationPrompt();
+  showNotification("Notifications are on", "BITS will alert you here.", "bits-notifications-on", () => {});
 }
 
 notificationEnable.addEventListener("click", requestNotifications);
