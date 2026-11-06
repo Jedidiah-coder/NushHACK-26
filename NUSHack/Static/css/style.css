@@ -65,6 +65,11 @@ ul {
   overflow-wrap: anywhere;
 }
 
+.user-menu button {
+  flex: none;
+  white-space: nowrap;
+}
+
 .auth {
   max-width: 400px;
 }
@@ -138,6 +143,14 @@ ul {
   overflow-y: auto;
   border: 1px solid #dddddd;
   background: #f0f0f0;
+}
+
+/* The header can wrap onto two lines on phones, leaving less room for the chat. */
+@media (max-width: 720px) {
+  .chat {
+    height: calc(100vh - 345px);
+    height: calc(100dvh - 345px);
+  }
 }
 
 .chat-empty {
