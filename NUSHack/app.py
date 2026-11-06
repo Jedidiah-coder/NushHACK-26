@@ -371,19 +371,47 @@ def save_new_record(data, user):
         return next((r for r in load_records() if r["id"] == record["id"]), record)
 
 
-def find_taken_down_notices(records):
-    """Return the IDs of notices taken down by their own authors."""
+def find_record(records, record_id, kind):
+    return next(
+        (
+            record
+            for record in records
+            if record["id"] == record_id and record["data"].get("type") == kind
+        ),
+        None,
+    )
+
+
+def find_removed_records(records, kind):
+    """Return the IDs of notices or messages removed by their authors or by an admin."""
     authors = {
         record["id"]: record["data"].get("sender_id")
         for record in records
-        if record["data"].get("type") == "notice"
+        if record["data"].get("type") == kind
     }
     return {
-        record["data"].get("notice_id")
+        record["data"].get(f"{kind}_id")
         for record in records
-        if record["data"].get("type") == "notice_removal"
-        and authors.get(record["data"].get("notice_id")) == record["data"].get("sender_id")
+        if record["data"].get("type") == f"{kind}_removal"
+        and (
+            record["data"].get("by_admin") is True
+            or authors.get(record["data"].get(f"{kind}_id")) == record["data"].get("sender_id")
+        )
     }
+
+
+def save_removal(records, kind, record_id, user):
+    if record_id not in find_removed_records(records, kind):
+        # A new record, not an edit, so this works offline and always reaches Supabase.
+        # by_admin comes from the session, and browsers can't post removal records directly.
+        save_new_record(
+            {
+                "type": f"{kind}_removal",
+                f"{kind}_id": record_id,
+                "by_admin": bool(user.get("is_admin")),
+            },
+            user,
+        )
 
 
 def find_resolved_sos(records):
@@ -394,14 +422,18 @@ def find_resolved_sos(records):
     }
 
 
-def is_visible(record, user_id, taken_down, resolved_sos):
+def is_visible(record, user_id, taken_down, deleted_messages, resolved_sos):
     data = record["data"]
     kind = data.get("type")
     if kind == "sos":
         return record["id"] not in resolved_sos
     if kind == "message":
         recipient_id = data.get("recipient_id")
-        return bool(recipient_id) and user_id in (data.get("sender_id"), recipient_id)
+        return (
+            record["id"] not in deleted_messages
+            and bool(recipient_id)
+            and user_id in (data.get("sender_id"), recipient_id)
+        )
     if kind == "notice":
         return record["id"] not in taken_down
     return kind in ("checklist", "checklist_template", "sos_phone")
@@ -606,10 +638,11 @@ def get_records():
     pull_remote_records(user_id)
     with data_lock:
         records = load_records()
-    taken_down = find_taken_down_notices(records)
+    taken_down = find_removed_records(records, "notice")
+    deleted_messages = find_removed_records(records, "message")
     resolved_sos = find_resolved_sos(records)
     return jsonify(
-        [r for r in records if is_visible(r, user_id, taken_down, resolved_sos)]
+        [r for r in records if is_visible(r, user_id, taken_down, deleted_messages, resolved_sos)]
     )
 
 
@@ -744,22 +777,31 @@ def take_down_notice(notice_id):
     user = session["user"]
     with data_lock:
         records = load_records()
-    notice = next(
-        (
-            record
-            for record in records
-            if record["id"] == notice_id and record["data"].get("type") == "notice"
-        ),
-        None,
-    )
+    notice = find_record(records, notice_id, "notice")
     if notice is None:
         return jsonify(error="Notice not found."), 404
     if notice["data"].get("sender_id") != user["id"] and not user.get("is_admin"):
         return jsonify(error="Only the author or an admin can take down a notice."), 403
 
-    if notice_id not in find_taken_down_notices(records):
-        # A new record, not an edit, so this works offline and always reaches Supabase.
-        save_new_record({"type": "notice_removal", "notice_id": notice_id}, user)
+    save_removal(records, "notice", notice_id, user)
+    return jsonify(removed=True)
+
+
+@app.route("/api/messages/<message_id>", methods=["DELETE"])
+def delete_message(message_id):
+    user = session["user"]
+    with data_lock:
+        records = load_records()
+    message = find_record(records, message_id, "message")
+    is_sender = message is not None and message["data"].get("sender_id") == user["id"]
+    is_recipient = message is not None and message["data"].get("recipient_id") == user["id"]
+    # Same reply as a missing message, so other people's messages stay private.
+    if not is_sender and not is_recipient:
+        return jsonify(error="Message not found."), 404
+    if not is_sender and not user.get("is_admin"):
+        return jsonify(error="Only the sender or an admin can delete a message."), 403
+
+    save_removal(records, "message", message_id, user)
     return jsonify(removed=True)
 
 

@@ -272,7 +272,29 @@ function createMessageBubble(record) {
   }
 
   bubble.append(text, meta);
+  if (isSent || currentUserIsAdmin) {
+    const button = document.createElement("button");
+    button.className = "message-delete";
+    button.type = "button";
+    button.textContent = "Delete";
+    button.addEventListener("click", () => deleteMessage(record.id));
+    bubble.append(button);
+  }
   return bubble;
+}
+
+async function deleteMessage(messageId) {
+  if (!window.confirm("Delete this message for both people?")) {
+    return;
+  }
+  messageError.textContent = "";
+  try {
+    await requestJson(`/api/messages/${encodeURIComponent(messageId)}`, { method: "DELETE" });
+    await Promise.all([refreshRecords(), refreshStatus()]);
+  } catch (error) {
+    console.warn(error);
+    messageError.textContent = "Couldn't delete the message. Please try again.";
+  }
 }
 
 function renderMessages() {
