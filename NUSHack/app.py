@@ -37,8 +37,8 @@ PUBLIC_ENDPOINTS = {"login", "login_code", "resend_login_code", "static"}
 EMAIL_PATTERN = r"[^@\s]+@[^@\s]+\.[^@\s]+"
 # Set on new accounts until their owner enters a code emailed to them.
 EMAIL_PENDING_KEY = "email_pending"
-# Supabase lets a project choose its code length.
-LOGIN_CODE_PATTERN = r"[0-9]{6,10}"
+# Must match Email OTP Length in the Supabase project's settings.
+LOGIN_CODE_PATTERN = r"[0-9]{6}"
 LOGIN_CODE_WINDOW = timedelta(minutes=10)
 MAX_LOGIN_CODE_ATTEMPTS = 5
 WRONG_LOGIN_CODE = "That code is wrong or has expired."
