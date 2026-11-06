@@ -33,6 +33,9 @@ MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 72
 MAX_MESSAGE_LENGTH = 500
 MAX_NOTICE_LENGTH = 1000
+MAX_CHECKLIST_NAME_LENGTH = 100
+MAX_CHECKLIST_TASK_LENGTH = 200
+MAX_CHECKLIST_TASKS = 50
 MAX_PULLED_RECORDS = 1000
 MAX_LISTED_USERS = 1000
 SERVICE_UNAVAILABLE = "Can't reach the account service. Check your connection and try again."
@@ -244,6 +247,18 @@ def prepare_record(data, user):
     if kind == "checklist":
         return data, None
 
+    if kind == "checklist_template":
+        name = clean_text(data.get("name"))
+        if not name or len(name) > MAX_CHECKLIST_NAME_LENGTH:
+            return None, f"Checklist names must be 1 to {MAX_CHECKLIST_NAME_LENGTH} characters."
+        items = data.get("items")
+        tasks = [clean_text(item) for item in items] if isinstance(items, list) else []
+        if not 1 <= len(tasks) <= MAX_CHECKLIST_TASKS:
+            return None, f"Checklists need 1 to {MAX_CHECKLIST_TASKS} tasks."
+        if not all(tasks) or any(len(task) > MAX_CHECKLIST_TASK_LENGTH for task in tasks):
+            return None, f"Tasks must be 1 to {MAX_CHECKLIST_TASK_LENGTH} characters."
+        return {"type": "checklist_template", "name": name, "items": tasks}, None
+
     text = clean_text(data.get("text"))
     if kind == "notice":
         if not text or len(text) > MAX_NOTICE_LENGTH:
@@ -312,7 +327,7 @@ def is_visible(record, user_id, taken_down):
         return bool(recipient_id) and user_id in (data.get("sender_id"), recipient_id)
     if kind == "notice":
         return record["id"] not in taken_down
-    return kind == "checklist"
+    return kind in ("checklist", "checklist_template")
 
 
 class AccountError(Exception):

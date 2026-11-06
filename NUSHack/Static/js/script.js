@@ -1,5 +1,5 @@
-// Edit this list to change the checks officers complete.
-const CHECKLIST = {
+// Used until someone saves their own version with the Edit checklist button.
+const DEFAULT_CHECKLIST = {
   name: "Fire safety walk",
   items: [
     "Fire exits clear",
@@ -9,6 +9,7 @@ const CHECKLIST = {
   ],
 };
 const RESULTS = ["Pass", "Fail", "N/A"];
+const MAX_CHECKLIST_TASKS = 50;
 const STATUS_CHECK_MS = 30000;
 const RECORD_CHECK_MS = 5000;
 const SCROLL_END_MARGIN_PX = 60;
@@ -31,11 +32,18 @@ const noticeError = document.getElementById("notice-error");
 const checklistForm = document.getElementById("checklist-form");
 const checklistItems = document.getElementById("checklist-items");
 const checklistError = document.getElementById("checklist-error");
+const checklistEditButton = document.getElementById("checklist-edit");
+const checklistEditor = document.getElementById("checklist-editor");
+const editorName = document.getElementById("editor-name");
+const editorTaskList = document.getElementById("editor-task-list");
+const editorError = document.getElementById("editor-error");
 
 const currentUserId = document.body.dataset.userId;
 let allMessages = [];
 let renderedMessages = "";
 let renderedUsers = "";
+let currentChecklist = DEFAULT_CHECKLIST;
+let renderedChecklist = "";
 const renderedLists = {};
 
 async function requestJson(path, options) {
@@ -233,7 +241,10 @@ async function refreshRecords() {
   allMessages = records.filter((r) => r.data.type === "message");
   const notices = records.filter((r) => r.data.type === "notice").reverse();
   const inspections = records.filter((r) => r.data.type === "checklist").reverse();
+  const checklistVersions = records.filter((r) => r.data.type === "checklist_template");
 
+  // Records are sorted oldest first, so the last version is the current one.
+  showChecklist(checklistVersions.at(-1)?.data ?? DEFAULT_CHECKLIST);
   renderMessages();
   showList("notice-list", "notice-empty", notices, createNoticeItem);
   showList("inspection-list", "inspection-empty", inspections, describeInspection);
@@ -295,11 +306,95 @@ async function saveRecord(data) {
   await Promise.all([refreshRecords(), refreshStatus()]);
 }
 
+function readChecklistAnswers() {
+  const formData = new FormData(checklistForm);
+  return currentChecklist.items.flatMap((item, index) => {
+    const result = formData.get(`result-${index}`);
+    return result ? [{ item, result, note: formData.get(`note-${index}`) ?? "" }] : [];
+  });
+}
+
+// Someone else can edit the checklist while an officer is filling it in.
+function restoreChecklistAnswers(answers) {
+  for (const answer of answers) {
+    const index = currentChecklist.items.indexOf(answer.item);
+    if (index === -1) {
+      continue;
+    }
+    const radio = checklistForm.querySelector(
+      `input[name="result-${index}"][value="${answer.result}"]`
+    );
+    radio.checked = true;
+    radio.dispatchEvent(new Event("change", { bubbles: true }));
+    checklistForm.elements[`note-${index}`].value = answer.note;
+  }
+}
+
+function showChecklist(checklist) {
+  const snapshot = JSON.stringify([checklist.name, checklist.items]);
+  if (snapshot === renderedChecklist) {
+    return;
+  }
+  renderedChecklist = snapshot;
+
+  const answers = readChecklistAnswers();
+  currentChecklist = checklist;
+  buildChecklist();
+  restoreChecklistAnswers(answers);
+}
+
+function addEditorTask(value = "") {
+  const row = document.createElement("li");
+  row.className = "editor-task";
+
+  const label = document.createElement("label");
+  label.className = "visually-hidden";
+  label.textContent = "Task";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.maxLength = 200;
+  input.autocomplete = "off";
+  input.value = value;
+  input.id = `editor-task-${crypto.getRandomValues(new Uint32Array(1))[0]}`;
+  label.htmlFor = input.id;
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.textContent = "Remove";
+  remove.addEventListener("click", () => {
+    const neighbour = row.nextElementSibling ?? row.previousElementSibling;
+    row.remove();
+    (neighbour?.querySelector("input") ?? document.getElementById("editor-add-task")).focus();
+  });
+
+  row.append(label, input, remove);
+  editorTaskList.append(row);
+  return input;
+}
+
+function openChecklistEditor() {
+  editorName.value = currentChecklist.name;
+  editorTaskList.replaceChildren();
+  currentChecklist.items.forEach((item) => addEditorTask(item));
+  editorError.textContent = "";
+  checklistForm.hidden = true;
+  checklistEditButton.hidden = true;
+  checklistEditor.hidden = false;
+  editorName.focus();
+}
+
+function closeChecklistEditor() {
+  checklistEditor.hidden = true;
+  checklistForm.hidden = false;
+  checklistEditButton.hidden = false;
+  checklistEditButton.focus();
+}
+
 function buildChecklist() {
-  document.getElementById("checklist-title").textContent = CHECKLIST.name;
+  document.getElementById("checklist-title").textContent = currentChecklist.name;
 
   checklistItems.replaceChildren(
-    ...CHECKLIST.items.map((itemName, index) => {
+    ...currentChecklist.items.map((itemName, index) => {
       const fieldset = document.createElement("fieldset");
       fieldset.className = "check-item";
 
@@ -414,19 +509,55 @@ messageForm.addEventListener("submit", async (event) => {
 checklistForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const formData = new FormData(checklistForm);
-  const results = CHECKLIST.items.map((item, index) => ({
+  const results = currentChecklist.items.map((item, index) => ({
     item,
     result: formData.get(`result-${index}`),
     note: (formData.get(`note-${index}`) ?? "").trim(),
   }));
   checklistError.textContent = "";
   try {
-    await saveRecord({ type: "checklist", name: CHECKLIST.name, results });
+    await saveRecord({ type: "checklist", name: currentChecklist.name, results });
     checklistForm.reset();
     hideChecklistNotes();
   } catch (error) {
     console.warn(error);
     checklistError.textContent = "Couldn't save your checklist. Please try again.";
+  }
+});
+
+checklistEditButton.addEventListener("click", openChecklistEditor);
+document.getElementById("editor-cancel").addEventListener("click", closeChecklistEditor);
+document.getElementById("editor-add-task").addEventListener("click", () => {
+  addEditorTask().focus();
+});
+
+checklistEditor.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = editorName.value.trim();
+  const items = [...editorTaskList.querySelectorAll("input")]
+    .map((input) => input.value.trim())
+    .filter(Boolean);
+
+  if (!name) {
+    editorError.textContent = "Enter a checklist name.";
+    return;
+  }
+  if (items.length === 0 || items.length > MAX_CHECKLIST_TASKS) {
+    editorError.textContent = `Add between 1 and ${MAX_CHECKLIST_TASKS} tasks.`;
+    return;
+  }
+  if (new Set(items).size !== items.length) {
+    editorError.textContent = "Each task must be different.";
+    return;
+  }
+
+  editorError.textContent = "";
+  try {
+    await saveRecord({ type: "checklist_template", name, items });
+    closeChecklistEditor();
+  } catch (error) {
+    console.warn(error);
+    editorError.textContent = "Couldn't save the checklist. Please try again.";
   }
 });
 
@@ -442,7 +573,7 @@ setInterval(() => {
   }
 }, RECORD_CHECK_MS);
 
-buildChecklist();
+showChecklist(DEFAULT_CHECKLIST);
 refreshStatus();
 refreshUsers().catch(console.warn);
 refreshRecords().catch(console.warn);

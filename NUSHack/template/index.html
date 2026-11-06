@@ -66,11 +66,28 @@
     </section>
 
     <section id="panel-checklist" role="tabpanel" aria-labelledby="tab-checklist" hidden>
-      <h2 id="checklist-title"></h2>
+      <div class="checklist-header">
+        <h2 id="checklist-title"></h2>
+        <button id="checklist-edit" type="button">Edit checklist</button>
+      </div>
       <form id="checklist-form">
         <div id="checklist-items"></div>
         <p class="form-error" id="checklist-error" role="alert"></p>
         <button type="submit">Submit checklist</button>
+      </form>
+      <form id="checklist-editor" hidden>
+        <label for="editor-name">Checklist name</label>
+        <input id="editor-name" type="text" maxlength="100" autocomplete="off" required>
+        <fieldset class="editor-tasks">
+          <legend>Tasks</legend>
+          <ul id="editor-task-list"></ul>
+          <button id="editor-add-task" type="button">Add task</button>
+        </fieldset>
+        <p class="form-error" id="editor-error" role="alert"></p>
+        <div class="editor-actions">
+          <button type="submit">Save changes</button>
+          <button id="editor-cancel" type="button">Cancel</button>
+        </div>
       </form>
       <h2>Recent inspections</h2>
       <ul class="record-list" id="inspection-list"></ul>

@@ -271,8 +271,47 @@ ul {
   font-size: 0.875rem;
 }
 
+.checklist-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin: 16px 0;
+}
+
+.checklist-header h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.editor-tasks {
+  margin: 16px 0;
+}
+
+.editor-task {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.editor-task button {
+  flex: none;
+}
+
+.editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .check-item {
   margin: 0 0 16px;
+}
+
+.check-item legend {
+  overflow-wrap: anywhere;
 }
 
 .check-options {
