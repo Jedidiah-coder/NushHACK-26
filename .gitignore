@@ -1,0 +1,16 @@
+# Secrets (Supabase keys, etc.)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+instance/
+
+# Editor and OS files
+.vscode/
+.DS_Store
+Thumbs.db
