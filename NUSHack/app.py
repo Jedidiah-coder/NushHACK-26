@@ -50,8 +50,10 @@ LAST_SEEN_KEY = "last_seen"
 ONLINE_WINDOW = timedelta(minutes=2)
 SERVICE_UNAVAILABLE = "Can't reach the account service. Check your connection and try again."
 
+SOS_PHONE_PATTERN = r"\+?[0-9][0-9 ()-]{2,19}"
+# Only the starting number. An admin's number from Settings replaces it on every device.
 SOS_PHONE_NUMBER = os.getenv("SOS_PHONE_NUMBER", "").strip()
-if not re.fullmatch(r"\+?[0-9][0-9 ()-]{2,19}", SOS_PHONE_NUMBER):
+if not re.fullmatch(SOS_PHONE_PATTERN, SOS_PHONE_NUMBER):
     SOS_PHONE_NUMBER = ""
 
 SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
@@ -304,6 +306,15 @@ def prepare_record(data, user):
             return None, f"Tasks must be 1 to {MAX_CHECKLIST_TASK_LENGTH} characters."
         return {"type": "checklist_template", "name": name, "items": tasks}, None
 
+    if kind == "sos_phone":
+        if not user.get("is_admin"):
+            return None, "Only an admin can change the SOS number."
+        phone = clean_text(data.get("phone"))
+        # Blank removes the number.
+        if phone and not re.fullmatch(SOS_PHONE_PATTERN, phone):
+            return None, "Enter a valid phone number, such as +65 12345678."
+        return {"type": "sos_phone", "phone": phone}, None
+
     if kind == "sos":
         if data.get("automatic") is True:
             return {"type": "sos", "automatic": True}, None
@@ -388,7 +399,7 @@ def is_visible(record, user_id, taken_down, resolved_sos):
         return bool(recipient_id) and user_id in (data.get("sender_id"), recipient_id)
     if kind == "notice":
         return record["id"] not in taken_down
-    return kind in ("checklist", "checklist_template")
+    return kind in ("checklist", "checklist_template", "sos_phone")
 
 
 class AccountError(Exception):

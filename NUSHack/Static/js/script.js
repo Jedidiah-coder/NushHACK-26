@@ -27,7 +27,7 @@ const SAFETY_TICK_MS = 5000;
 const SAFETY_SLEEP_GAP_MS = 3 * 60 * 1000;
 const SAFETY_SOS_RETRY_MS = 30000;
 const SAFETY_ACTIVITY_SAVE_MS = 5000;
-const AUTOMATIC_SOS_REASON = "You didn't respond to 2 safety checks, so BITS sent this for you. ";
+const AUTOMATIC_SOS_REASON = "You didn't respond to 2 safety checks, so SecuriLock sent this for you. ";
 const NOTIFICATIONS_BLOCKED_TEXT =
   "Notifications are blocked. To turn them on, allow them for this site in your browser's settings.";
 
@@ -108,7 +108,8 @@ let safetySosRetryAt = 0;
 let activeSos = [];
 let renderedSos = "";
 let sosPanelView = null;
-const sosPhone = document.body.dataset.sosPhone;
+const defaultSosPhone = document.body.dataset.sosPhone;
+let sosPhone = defaultSosPhone;
 const currentUserName = document.body.dataset.userName;
 const notificationsSupported = "Notification" in window && window.isSecureContext;
 const renderedLists = {};
@@ -309,11 +310,18 @@ function describeInspection(record) {
 }
 
 function setUpSosContacts() {
+  // Only admins have this box. Don't overwrite it while one is typing.
+  const phoneInput = document.getElementById("settings-sos-phone");
+  if (phoneInput && document.activeElement !== phoneInput) {
+    phoneInput.value = sosPhone;
+  }
+
   const contactText = document.getElementById("sos-contact-text");
+  const contactActions = document.getElementById("sos-contact-actions");
+  contactActions.hidden = !sosPhone;
   if (!sosPhone) {
     contactText.textContent =
-      "No emergency number is set up in BITS. Call your control room or emergency services directly.";
-    document.getElementById("sos-contact-actions").hidden = true;
+      "No emergency number is set up in SecuriLock. Call your control room or emergency services directly.";
     return;
   }
   contactText.textContent = `Emergency number: ${sosPhone}. Calling and texting need a phone.`;
@@ -340,7 +348,7 @@ function renderSosPanel() {
   if (sosPanelView.name === "confirm") {
     showSosPanelContent(
       "Send an SOS alert?",
-      "Everyone with BITS open will be alerted straight away.",
+      "Everyone with SecuriLock open will be alerted straight away.",
       { confirming: true }
     );
     return;
@@ -348,7 +356,7 @@ function renderSosPanel() {
   if (sosPanelView.name === "failed") {
     showSosPanelContent(
       "SOS NOT sent",
-      "BITS can't be reached and your alert was not saved. Call or text now, then press SOS to try again."
+      "SecuriLock can't be reached and your alert was not saved. Call or text now, then press SOS to try again."
     );
     return;
   }
@@ -360,12 +368,12 @@ function renderSosPanel() {
   } else if (record.synced) {
     showSosPanelContent(
       record.data.automatic ? "Automatic SOS sent" : "SOS sent",
-      `${record.data.automatic ? AUTOMATIC_SOS_REASON : ""}Anyone with BITS open will see your alert, but this doesn't confirm someone has read it. If you're safe, press Mark resolved. If you're in immediate danger, call or text as well.`
+      `${record.data.automatic ? AUTOMATIC_SOS_REASON : ""}Anyone with SecuriLock open will see your alert, but this doesn't confirm someone has read it. If you're safe, press Mark resolved. If you're in immediate danger, call or text as well.`
     );
   } else {
     showSosPanelContent(
       "SOS NOT sent yet: no data connection",
-      `${record.data.automatic ? AUTOMATIC_SOS_REASON : ""}Your alert is saved on this device and BITS will keep trying to send it. Call or text now, as these may work without internet.`
+      `${record.data.automatic ? AUTOMATIC_SOS_REASON : ""}Your alert is saved on this device and SecuriLock will keep trying to send it. Call or text now, as these may work without internet.`
     );
   }
 }
@@ -485,13 +493,13 @@ function showSafetyCheck(level) {
 
   safetyCheckText.textContent =
     level < SAFETY_MISSED_CHECKS_FOR_SOS
-      ? "You've been inactive for a while. Press I'm OK, or BITS will check again in 5 minutes and then send an SOS."
-      : "Last check. If you don't press I'm OK within 5 minutes, BITS will send an SOS to everyone.";
+      ? "You've been inactive for a while. Press I'm OK, or SecuriLock will check again in 5 minutes and then send an SOS."
+      : "Last check. If you don't press I'm OK within 5 minutes, SecuriLock will send an SOS to everyone.";
   safetyCheck.scrollIntoView({ block: "nearest" });
   if (notificationsSupported && Notification.permission === "granted") {
     safetyNotification = showNotification(
       "Are you OK?",
-      "Open BITS and press I'm OK.",
+      "Open SecuriLock and press I'm OK.",
       "bits-safety-check",
       () => {},
       true
@@ -582,7 +590,7 @@ function setSettingsOpen(open) {
   settingsPanel.hidden = !open;
   settingsButton.setAttribute("aria-expanded", String(open));
   if (open) {
-    // The permission can be changed in the browser while BITS is open.
+    // The permission can be changed in the browser while SecuriLock is open.
     updateNotificationSettings();
   }
 }
@@ -618,14 +626,14 @@ function announceRecord(record) {
   const sender = record.data.sender_name ?? "Someone";
   if (record.data.type === "sos") {
     const body = record.data.automatic
-      ? "Automatic: no response to safety checks. Open BITS now."
-      : "Open BITS now.";
+      ? "Automatic: no response to safety checks. Open SecuriLock now."
+      : "Open SecuriLock now.";
     showNotification(`SOS from ${sender}`, body, record.id, () => {}, true);
     return;
   }
   if (record.data.type === "message") {
     // Message text stays out of the alert, so it can't show on a locked or shared screen.
-    showNotification(`New message from ${sender}`, "Open BITS to read it.", record.id, () =>
+    showNotification(`New message from ${sender}`, "Open SecuriLock to read it.", record.id, () =>
       openConversation(record.data.sender_id)
     );
     return;
@@ -670,7 +678,7 @@ function notifyAboutNewRecords(records) {
     (record) => record.data.type !== "sos" && !isRecordOnScreen(record)
   );
   if (toAnnounce.length > MAX_SEPARATE_NOTIFICATIONS) {
-    showNotification(`${toAnnounce.length} new updates`, "Open BITS to see them.", "bits-summary", () => {});
+    showNotification(`${toAnnounce.length} new updates`, "Open SecuriLock to see them.", "bits-summary", () => {});
     return;
   }
   toAnnounce.forEach(announceRecord);
@@ -689,6 +697,12 @@ async function refreshRecords() {
 
   // Records are sorted oldest first, so the last version is the current one.
   showChecklist(checklistVersions.at(-1)?.data ?? DEFAULT_CHECKLIST);
+  const latestSosPhone = records.filter((r) => r.data.type === "sos_phone").at(-1);
+  const currentSosPhone = latestSosPhone ? latestSosPhone.data.phone : defaultSosPhone;
+  if (currentSosPhone !== sosPhone) {
+    sosPhone = currentSosPhone;
+    setUpSosContacts();
+  }
   renderMessages();
   messagesLoaded = true;
   updateActivity();
@@ -855,7 +869,7 @@ function renderPeople(users) {
       ...createPeopleGroup("People", users, ""),
       Object.assign(document.createElement("p"), {
         className: "field-hint",
-        textContent: "You're offline, so BITS can't check who else is online.",
+        textContent: "You're offline, so SecuriLock can't check who else is online.",
       })
     );
     return;
@@ -1152,7 +1166,7 @@ document.getElementById("reset-data").addEventListener("click", async () => {
   }
 
   const confirmed = window.confirm(
-    `Factory reset your data?\n\nThis erases the saved data file on this computer. ${lossWarning}\n\nRecords already in Supabase are not deleted and will download again when BITS is online.`
+    `Factory reset your data?\n\nThis erases the saved data file on this computer. ${lossWarning}\n\nRecords already in Supabase are not deleted and will download again when SecuriLock is online.`
   );
   if (!confirmed) {
     return;
@@ -1226,7 +1240,7 @@ function createPasswordForm(account) {
 
 async function makeAccountAdmin(account) {
   const confirmed = window.confirm(
-    `Make ${account.name} an admin?\n\nThey'll be able to grant accounts, make other admins, see members' login emails and change members' passwords. This can't be undone in BITS.`
+    `Make ${account.name} an admin?\n\nThey'll be able to grant accounts, make other admins, see members' login emails and change members' passwords. This can't be undone in SecuriLock.`
   );
   if (!confirmed) {
     return;
@@ -1288,6 +1302,27 @@ async function refreshAccounts() {
     accountListError.textContent = error.userMessage ?? "Couldn't load the accounts. Please try again.";
   }
 }
+
+// Only an admin's page has this form.
+document.getElementById("settings-sos-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const phoneInput = document.getElementById("settings-sos-phone");
+  const sosError = document.getElementById("settings-sos-error");
+  const sosResult = document.getElementById("settings-sos-result");
+  const phone = phoneInput.value.trim();
+  sosError.textContent = "";
+  sosResult.textContent = "";
+  try {
+    await saveRecord({ type: "sos_phone", phone });
+    phoneInput.value = phone;
+    sosResult.textContent = phone
+      ? `Saved. Other devices will show ${phone} once this one has synced.`
+      : "Number removed. Other devices will update once this one has synced.";
+  } catch (error) {
+    console.warn(error);
+    sosError.textContent = error.userMessage ?? "Couldn't save the number. Please try again.";
+  }
+});
 
 // Only an admin's page has this form.
 document.getElementById("account-form")?.addEventListener("submit", async (event) => {
@@ -1361,7 +1396,7 @@ async function requestNotifications() {
     return;
   }
   updateNotificationPrompt();
-  showNotification("Notifications are on", "BITS will alert you here.", "bits-notifications-on", () => {});
+  showNotification("Notifications are on", "SecuriLock will alert you here.", "bits-notifications-on", () => {});
 }
 
 notificationEnable.addEventListener("click", requestNotifications);

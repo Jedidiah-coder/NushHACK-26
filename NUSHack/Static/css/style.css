@@ -466,7 +466,8 @@ ul {
   margin-bottom: 0.25rem;
 }
 
-.settings-section select {
+.settings-section select,
+.settings-section input[type="tel"] {
   display: block;
   width: 100%;
   max-width: 25rem;

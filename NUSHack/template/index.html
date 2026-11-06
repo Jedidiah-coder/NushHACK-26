@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BITS</title>
+  <title>SecuriLock</title>
   <link rel="icon" href="{{ url_for('static', filename='favicon.png') }}" type="image/png">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <script src="{{ url_for('static', filename='js/appearance.js') }}"></script>
@@ -94,6 +94,20 @@
       </select>
     </div>
 
+    {% if user.is_admin %}
+    <div class="settings-section">
+      <h3>Admin Options</h3>
+      <form id="settings-sos-form">
+        <label for="settings-sos-phone">SOS phone number</label>
+        <input id="settings-sos-phone" type="tel" maxlength="20" placeholder="+65 12345678" autocomplete="off">
+        <p class="field-hint">Everyone sees this on the SOS screen. Leave it blank to remove the number.</p>
+        <button type="submit">Save number</button>
+        <p class="form-error" id="settings-sos-error" role="alert"></p>
+        <p id="settings-sos-result" role="status"></p>
+      </form>
+    </div>
+    {% endif %}
+
     <div class="settings-section">
       <h3>Notifications</h3>
       <p id="settings-notification-text"></p>
@@ -110,7 +124,7 @@
   </section>
 
   <div class="notification-prompt" id="notification-prompt" hidden>
-    <p id="notification-text">Get alerts for new direct messages, notices and SOS calls while BITS is open.</p>
+    <p id="notification-text">Get alerts for new direct messages, notices and SOS calls while SecuriLock is open.</p>
     <div class="notification-actions">
       <button class="notification-enable" id="notification-enable" type="button">Turn on notifications</button>
       <button id="notification-dismiss" type="button">Not now</button>
