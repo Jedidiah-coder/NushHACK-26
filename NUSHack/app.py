@@ -1,3 +1,5 @@
+#Use cd "C:\Users\NGXUANYIJEDIDIAH(WUX\Desktop\Linked to Github NUSHack-26\NUSHack"python -m flask --app app create-admin
+ 
 import json
 import os
 import re
