@@ -17,9 +17,6 @@ This is the repository for our NushHACK 2026 submission.
 # Functionality for Officer (Might Implement)
 
 ## 1. Patrols
-- **Guard tour:** Follow a set patrol route with checkpoints in order.
-- **Checkpoint scanning:** Scan a QR code or NFC tag at each point to prove presence, with time and GPS saved on the phone.
-- **Missed or late checkpoint alerts:** The app counts down to the next checkpoint and warns the officer locally if it is overdue.
 - **Ad-hoc observations:** Record observations at any checkpoint, such as "door ajar" or "light faulty".
 - **Offline notes:** The route, checkpoints and schedule are downloaded at the start of the shift.
 
