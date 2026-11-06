@@ -20,6 +20,8 @@ const NOTIFICATION_DISMISSED_KEY = "bits-notification-prompt-dismissed";
 const tabs = [...document.querySelectorAll(".tab")];
 const statusElement = document.getElementById("status");
 const statusText = document.getElementById("status-text");
+const dataReset = document.getElementById("data-reset");
+const resetResult = document.getElementById("reset-result");
 const messageForm = document.getElementById("message-form");
 const messageInput = document.getElementById("message-text");
 const messageError = document.getElementById("message-error");
@@ -542,6 +544,11 @@ async function refreshUsers() {
 function showStatus(state, label, pending) {
   statusElement.dataset.state = state;
   statusText.textContent = pending > 0 ? `${label} · ${pending} pending` : label;
+  // Factory reset is only offered offline.
+  dataReset.hidden = state !== "offline";
+  if (dataReset.hidden) {
+    resetResult.textContent = "";
+  }
 }
 
 async function refreshStatus() {
@@ -784,7 +791,6 @@ checklistForm.addEventListener("submit", async (event) => {
 });
 
 document.getElementById("reset-data").addEventListener("click", async () => {
-  const resetResult = document.getElementById("reset-result");
   resetResult.textContent = "";
 
   let lossWarning = "Anything not yet uploaded will be permanently lost.";
