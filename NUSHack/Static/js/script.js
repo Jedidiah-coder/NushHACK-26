@@ -12,7 +12,7 @@ const RESULTS = ["Pass", "Fail", "N/A"];
 const STATUS_CHECK_MS = 30000;
 
 const tabs = [...document.querySelectorAll(".tab")];
-const statusPill = document.getElementById("status");
+const statusElement = document.getElementById("status");
 const statusText = document.getElementById("status-text");
 const messageForm = document.getElementById("message-form");
 const messageInput = document.getElementById("message-text");
@@ -96,7 +96,7 @@ async function refreshRecords() {
 }
 
 function showStatus(state, label, pending) {
-  statusPill.dataset.state = state;
+  statusElement.dataset.state = state;
   statusText.textContent = pending > 0 ? `${label} · ${pending} pending` : label;
 }
 
