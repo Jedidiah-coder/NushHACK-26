@@ -557,7 +557,8 @@ function updateConversation() {
   const hasPerson = Boolean(recipientSelect.value);
   messageInput.disabled = !hasPerson;
   messageSend.disabled = !hasPerson;
-  for (const button of people.querySelectorAll("button")) {
+  // A server started before an update still sends the older page, without this list.
+  for (const button of people?.querySelectorAll("button") ?? []) {
     button.setAttribute("aria-pressed", String(button.dataset.userId === recipientSelect.value));
   }
   renderMessages();
@@ -596,6 +597,9 @@ function createPeopleGroup(heading, users, emptyText) {
 }
 
 function renderPeople(users) {
+  if (!people) {
+    return;
+  }
   people.hidden = users.length === 0;
   if (users.some((user) => user.status === "unknown")) {
     people.replaceChildren(
