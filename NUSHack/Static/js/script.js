@@ -11,7 +11,6 @@ const CHECKLIST = {
 const RESULTS = ["Pass", "Fail", "N/A"];
 const STATUS_CHECK_MS = 30000;
 const MESSAGE_CHECK_MS = 5000;
-const DEVICE_ID_KEY = "bits-device-id";
 const SCROLL_END_MARGIN_PX = 60;
 
 const tabs = [...document.querySelectorAll(".tab")];
@@ -27,27 +26,14 @@ const checklistForm = document.getElementById("checklist-form");
 const checklistItems = document.getElementById("checklist-items");
 const checklistError = document.getElementById("checklist-error");
 
-// With no login yet, this anonymous ID is how a browser recognises its own messages.
-function getDeviceId() {
-  const createId = () =>
-    crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  try {
-    let id = localStorage.getItem(DEVICE_ID_KEY);
-    if (!id) {
-      id = createId();
-      localStorage.setItem(DEVICE_ID_KEY, id);
-    }
-    return id;
-  } catch {
-    return createId();
-  }
-}
-
-const deviceId = getDeviceId();
+const currentUserId = document.body.dataset.userId;
 let renderedMessages = "";
 
 async function requestJson(path, options) {
   const response = await fetch(path, options);
+  if (response.status === 401) {
+    window.location.assign("/login");
+  }
   if (!response.ok) {
     throw new Error(`Request to ${path} failed with status ${response.status}`);
   }
@@ -93,7 +79,8 @@ function createRecordItem(titleText, record, details = []) {
   const meta = document.createElement("p");
   meta.className = "record-meta";
   const syncLabel = record.synced ? "Synced" : "Pending upload";
-  meta.textContent = `${formatTime(record.created_at)} · ${syncLabel}`;
+  const author = record.data.sender_name ? `${record.data.sender_name} · ` : "";
+  meta.textContent = `${author}${formatTime(record.created_at)} · ${syncLabel}`;
   item.append(meta);
   return item;
 }
@@ -116,9 +103,16 @@ function formatDateLabel(date) {
 }
 
 function createMessageBubble(record) {
-  const isSent = record.data.sender === deviceId;
+  const isSent = record.data.sender_id === currentUserId;
   const bubble = document.createElement("li");
   bubble.className = `message ${isSent ? "message-sent" : "message-received"}`;
+
+  if (!isSent && record.data.sender_name) {
+    const sender = document.createElement("p");
+    sender.className = "message-sender";
+    sender.textContent = record.data.sender_name;
+    bubble.append(sender);
+  }
 
   const text = document.createElement("p");
   text.textContent = record.data.text ?? record.data.note;
@@ -312,7 +306,7 @@ messageForm.addEventListener("submit", async (event) => {
   }
   messageError.textContent = "";
   try {
-    await saveRecord({ type: "message", text, sender: deviceId });
+    await saveRecord({ type: "message", text });
     messageForm.reset();
     messageInput.focus();
     scrollChatToEnd();

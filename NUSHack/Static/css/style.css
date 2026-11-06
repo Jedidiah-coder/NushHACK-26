@@ -57,6 +57,44 @@ ul {
   font-weight: 600;
 }
 
+.user-menu {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  overflow-wrap: anywhere;
+}
+
+.auth {
+  max-width: 400px;
+}
+
+.auth label {
+  display: block;
+  margin-top: 12px;
+}
+
+.auth input {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px;
+}
+
+.auth button {
+  margin-top: 16px;
+}
+
+.field-hint {
+  margin: 4px 0 0;
+  color: #595959;
+  font-size: 0.875rem;
+}
+
+.message .message-sender {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
 #status[data-state="online"] {
   color: #116b3d;
 }

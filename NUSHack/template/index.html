@@ -7,12 +7,16 @@
   <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
-<body>
+<body data-user-id="{{ user.id }}">
   <header class="app-header">
     <span class="brand">BITS</span>
     <p id="status" role="status" data-state="checking">
       <span id="status-text">Checking...</span>
     </p>
+    <form class="user-menu" action="{{ url_for('logout') }}" method="post">
+      <span id="user-name">{{ user.name }}</span>
+      <button id="logout-button" type="submit">Log out</button>
+    </form>
   </header>
 
   <main>

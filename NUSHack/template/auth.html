@@ -1,0 +1,50 @@
+{% set is_register = mode == "register" %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ "Sign up" if is_register else "Log in" }} - BITS</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <header class="app-header">
+    <span class="brand">BITS</span>
+  </header>
+
+  <main class="auth">
+    <h1>{{ "Create your account" if is_register else "Log in" }}</h1>
+
+    {% if error %}
+    <p class="form-error" id="auth-error" role="alert">{{ error }}</p>
+    {% endif %}
+
+    <form id="auth-form" method="post">
+      {% if is_register %}
+      <label for="name">Name</label>
+      <input id="name" name="name" type="text" value="{{ name }}" maxlength="100" autocomplete="name" required>
+      {% endif %}
+
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" value="{{ email }}" maxlength="254" autocomplete="email" required>
+
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" maxlength="72"
+        {% if is_register %}minlength="8" autocomplete="new-password"{% else %}autocomplete="current-password"{% endif %}
+        required>
+      {% if is_register %}
+      <p class="field-hint">At least 8 characters.</p>
+      {% endif %}
+
+      <button type="submit">{{ "Sign up" if is_register else "Log in" }}</button>
+    </form>
+
+    {% if is_register %}
+    <p>Already have an account? <a href="{{ url_for('login') }}">Log in</a></p>
+    {% else %}
+    <p>New here? <a href="{{ url_for('register') }}">Create an account</a></p>
+    {% endif %}
+  </main>
+</body>
+</html>

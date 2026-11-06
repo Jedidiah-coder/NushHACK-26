@@ -2,14 +2,23 @@ import json
 import os
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request
+from flask import (
+    Flask,
+    jsonify,
+    make_response,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from postgrest.exceptions import APIError
-from supabase import ClientOptions, create_client
+from supabase import AuthError, ClientOptions, create_client
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -17,12 +26,31 @@ load_dotenv(BASE_DIR / ".env")
 DATA_FILE = BASE_DIR / "data.json"
 SUPABASE_TABLE = "records"
 SUPABASE_ERRORS = (httpx.HTTPError, APIError)
+AUTH_ERRORS = (httpx.HTTPError, AuthError)
+PUBLIC_ENDPOINTS = {"login", "register", "static"}
+MIN_PASSWORD_LENGTH = 8
+MAX_PASSWORD_LENGTH = 72
+SERVICE_UNAVAILABLE = "Can't reach the account service. Check your connection and try again."
+
+SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "Add FLASK_SECRET_KEY to NUSHack/.env. Generate a value with: "
+        'python -c "import secrets; print(secrets.token_hex(32))"'
+    )
 
 app = Flask(
     __name__,
     template_folder="template",
     static_folder="Static",
     static_url_path="/static",
+)
+app.config.update(
+    SECRET_KEY=SECRET_KEY,
+    SESSION_COOKIE_SAMESITE="Lax",
+    # Set SESSION_COOKIE_SECURE=1 when hosting over HTTPS.
+    SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE") == "1",
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
 )
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -123,9 +151,140 @@ def pull_remote_records():
             save_records(records + new_records)
 
 
+class AccountError(Exception):
+    """A sign-up or log-in problem, with a message that's safe to show the user."""
+
+
+def create_account(name, email, password):
+    if supabase is None:
+        raise AccountError(SERVICE_UNAVAILABLE)
+    try:
+        return supabase.auth.admin.create_user(
+            {
+                "email": email,
+                "password": password,
+                "email_confirm": True,
+                "user_metadata": {"name": name},
+            }
+        ).user
+    except AUTH_ERRORS as error:
+        code = getattr(error, "code", None)
+        app.logger.warning("Sign-up failed: %s %s", type(error).__name__, code)
+        if code in ("email_exists", "user_already_exists"):
+            raise AccountError("An account with this email already exists.") from error
+        if code == "weak_password":
+            raise AccountError("Please choose a stronger password.") from error
+        if code in ("email_address_invalid", "validation_failed"):
+            raise AccountError("Enter a valid email address.") from error
+        raise AccountError(SERVICE_UNAVAILABLE) from error
+
+
+def verify_login(email, password):
+    if supabase is None:
+        raise AccountError(SERVICE_UNAVAILABLE)
+    # Signing in changes a client's credentials, so this must not use the shared client.
+    client = create_client(
+        SUPABASE_URL,
+        SUPABASE_KEY,
+        options=ClientOptions(auto_refresh_token=False, persist_session=False),
+    )
+    try:
+        return client.auth.sign_in_with_password(
+            {"email": email, "password": password}
+        ).user
+    except AUTH_ERRORS as error:
+        code = getattr(error, "code", None)
+        app.logger.warning("Log-in failed: %s %s", type(error).__name__, code)
+        if code == "invalid_credentials":
+            raise AccountError("Incorrect email or password.") from error
+        raise AccountError(SERVICE_UNAVAILABLE) from error
+
+
+def start_session(user):
+    metadata = user.user_metadata or {}
+    session.clear()
+    session.permanent = True
+    session["user"] = {
+        "id": user.id,
+        "name": metadata.get("name") or user.email,
+        "email": user.email,
+    }
+
+
+def find_signup_problem(name, email, password):
+    if not name or len(name) > 100:
+        return "Enter your name (up to 100 characters)."
+    if "@" not in email or len(email) > 254:
+        return "Enter a valid email address."
+    if not MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
+        return (
+            f"Password must be {MIN_PASSWORD_LENGTH} to "
+            f"{MAX_PASSWORD_LENGTH} characters long."
+        )
+    return None
+
+
+@app.before_request
+def require_login():
+    if request.endpoint in PUBLIC_ENDPOINTS or "user" in session:
+        return None
+    if request.path.startswith("/api/"):
+        return jsonify(error="Log in first."), 401
+    return redirect(url_for("login"))
+
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if "user" in session:
+        return redirect(url_for("index"))
+
+    name = request.form.get("name", "").strip()
+    email = request.form.get("email", "").strip().lower()
+    error = None
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        try:
+            error = find_signup_problem(name, email, password)
+            if not error:
+                start_session(create_account(name, email, password))
+                return redirect(url_for("index"))
+        except AccountError as account_error:
+            error = str(account_error)
+
+    status = 400 if error else 200
+    return render_template("auth.html", mode="register", name=name, email=email, error=error), status
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if "user" in session:
+        return redirect(url_for("index"))
+
+    email = request.form.get("email", "").strip().lower()
+    error = None
+    if request.method == "POST":
+        try:
+            start_session(verify_login(email, request.form.get("password", "")))
+            return redirect(url_for("index"))
+        except AccountError as account_error:
+            error = str(account_error)
+
+    status = 400 if error else 200
+    return render_template("auth.html", mode="login", email=email, error=error), status
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
 @app.route("/")
 def index():
-    return render_template("index.html")
+    response = make_response(render_template("index.html", user=session["user"]))
+    # Stops the Back button showing this page on a shared device after logging out.
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.route("/api/status")
@@ -148,9 +307,11 @@ def create_record():
     if not isinstance(data, dict) or not data:
         return jsonify(error="Send a non-empty JSON object."), 400
 
+    user = session["user"]
     record = {
         "id": str(uuid.uuid4()),
-        "data": data,
+        # The sender comes from the session, so a request can't pretend to be someone else.
+        "data": {**data, "sender_id": user["id"], "sender_name": user["name"]},
         "created_at": datetime.now(timezone.utc).isoformat(),
         "synced": False,
     }
