@@ -7,9 +7,10 @@
   <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
-<body data-user-id="{{ user.id }}">
+<body data-user-id="{{ user.id }}" data-user-name="{{ user.name }}" data-sos-phone="{{ sos_phone }}">
   <header class="app-header">
     <span class="brand">BITS</span>
+    <button class="sos-button" id="sos-button" type="button">SOS</button>
     <p id="status" role="status" data-state="checking">
       <span id="status-text">Checking...</span>
     </p>
@@ -19,8 +20,27 @@
     </form>
   </header>
 
+  <section class="sos-panel" id="sos-panel" role="alert" hidden>
+    <p class="sos-panel-title" id="sos-panel-title"></p>
+    <p id="sos-panel-text"></p>
+    <div class="sos-actions" id="sos-confirm-actions">
+      <button class="sos-button" id="sos-send" type="button">Send SOS</button>
+      <button id="sos-cancel" type="button">Cancel</button>
+    </div>
+    <div id="sos-contacts">
+      <p id="sos-contact-text"></p>
+      <div class="sos-actions" id="sos-contact-actions">
+        <a class="sos-contact" id="sos-call">Call</a>
+        <a class="sos-contact" id="sos-sms">Send SMS</a>
+      </div>
+    </div>
+    <button id="sos-close" type="button">Close</button>
+  </section>
+
+  <ul class="sos-alerts" id="sos-alerts"></ul>
+
   <div class="notification-prompt" id="notification-prompt" hidden>
-    <p id="notification-text">Get alerts for new direct messages and notices while BITS is open.</p>
+    <p id="notification-text">Get alerts for new direct messages, notices and SOS calls while BITS is open.</p>
     <div class="notification-actions">
       <button class="notification-enable" id="notification-enable" type="button">Turn on notifications</button>
       <button id="notification-dismiss" type="button">Not now</button>

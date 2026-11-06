@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import threading
 import uuid
 from collections import Counter
@@ -39,6 +40,10 @@ MAX_CHECKLIST_TASKS = 50
 MAX_PULLED_RECORDS = 1000
 MAX_LISTED_USERS = 1000
 SERVICE_UNAVAILABLE = "Can't reach the account service. Check your connection and try again."
+
+SOS_PHONE_NUMBER = os.getenv("SOS_PHONE_NUMBER", "").strip()
+if not re.fullmatch(r"\+?[0-9][0-9 ()-]{2,19}", SOS_PHONE_NUMBER):
+    SOS_PHONE_NUMBER = ""
 
 SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
 if not SECRET_KEY:
@@ -259,6 +264,9 @@ def prepare_record(data, user):
             return None, f"Tasks must be 1 to {MAX_CHECKLIST_TASK_LENGTH} characters."
         return {"type": "checklist_template", "name": name, "items": tasks}, None
 
+    if kind == "sos":
+        return {"type": "sos"}, None
+
     text = clean_text(data.get("text"))
     if kind == "notice":
         if not text or len(text) > MAX_NOTICE_LENGTH:
@@ -319,9 +327,19 @@ def find_taken_down_notices(records):
     }
 
 
-def is_visible(record, user_id, taken_down):
+def find_resolved_sos(records):
+    return {
+        record["data"].get("sos_id")
+        for record in records
+        if record["data"].get("type") == "sos_resolved"
+    }
+
+
+def is_visible(record, user_id, taken_down, resolved_sos):
     data = record["data"]
     kind = data.get("type")
+    if kind == "sos":
+        return record["id"] not in resolved_sos
     if kind == "message":
         recipient_id = data.get("recipient_id")
         return bool(recipient_id) and user_id in (data.get("sender_id"), recipient_id)
@@ -473,7 +491,9 @@ def logout():
 
 @app.route("/")
 def index():
-    response = make_response(render_template("index.html", user=session["user"]))
+    response = make_response(
+        render_template("index.html", user=session["user"], sos_phone=SOS_PHONE_NUMBER)
+    )
     # Stops the Back button showing this page on a shared device after logging out.
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -493,7 +513,10 @@ def get_records():
     with data_lock:
         records = load_records()
     taken_down = find_taken_down_notices(records)
-    return jsonify([r for r in records if is_visible(r, user_id, taken_down)])
+    resolved_sos = find_resolved_sos(records)
+    return jsonify(
+        [r for r in records if is_visible(r, user_id, taken_down, resolved_sos)]
+    )
 
 
 @app.route("/api/users")
@@ -533,6 +556,17 @@ def create_record():
     if error:
         return jsonify(error=error), 400
     return jsonify(save_new_record(prepared, user)), 201
+
+
+@app.route("/api/sos/<sos_id>/resolve", methods=["POST"])
+def resolve_sos(sos_id):
+    with data_lock:
+        records = load_records()
+    if not any(r["id"] == sos_id and r["data"].get("type") == "sos" for r in records):
+        return jsonify(error="SOS not found."), 404
+    if sos_id not in find_resolved_sos(records):
+        save_new_record({"type": "sos_resolved", "sos_id": sos_id}, session["user"])
+    return jsonify(resolved=True)
 
 
 @app.route("/api/notices/<notice_id>", methods=["DELETE"])

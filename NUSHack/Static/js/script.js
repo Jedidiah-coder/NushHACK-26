@@ -27,6 +27,15 @@ const messageChat = document.getElementById("message-chat");
 const messageList = document.getElementById("message-list");
 const messagePanel = document.getElementById("panel-message");
 const homePanel = document.getElementById("panel-home");
+const sosButton = document.getElementById("sos-button");
+const sosPanel = document.getElementById("sos-panel");
+const sosPanelTitle = document.getElementById("sos-panel-title");
+const sosPanelText = document.getElementById("sos-panel-text");
+const sosConfirmActions = document.getElementById("sos-confirm-actions");
+const sosSend = document.getElementById("sos-send");
+const sosContacts = document.getElementById("sos-contacts");
+const sosClose = document.getElementById("sos-close");
+const sosAlerts = document.getElementById("sos-alerts");
 const notificationPrompt = document.getElementById("notification-prompt");
 const notificationText = document.getElementById("notification-text");
 const notificationEnable = document.getElementById("notification-enable");
@@ -53,6 +62,11 @@ let renderedUsers = "";
 let currentChecklist = DEFAULT_CHECKLIST;
 let renderedChecklist = "";
 let seenRecordIds = null;
+let activeSos = [];
+let renderedSos = "";
+let sosPanelView = null;
+const sosPhone = document.body.dataset.sosPhone;
+const currentUserName = document.body.dataset.userName;
 const notificationsSupported = "Notification" in window && window.isSecureContext;
 const renderedLists = {};
 
@@ -244,6 +258,135 @@ function describeInspection(record) {
   return createRecordItem(`${record.data.name}: ${summary}`, record, details);
 }
 
+function setUpSosContacts() {
+  const contactText = document.getElementById("sos-contact-text");
+  if (!sosPhone) {
+    contactText.textContent =
+      "No emergency number is set up in BITS. Call your control room or emergency services directly.";
+    document.getElementById("sos-contact-actions").hidden = true;
+    return;
+  }
+  contactText.textContent = `Emergency number: ${sosPhone}. Calling and texting need a phone.`;
+  const dialNumber = sosPhone.replace(/[ ()-]/g, "");
+  const smsBody = encodeURIComponent(`SOS from ${currentUserName}. I need help.`);
+  document.getElementById("sos-call").href = `tel:${dialNumber}`;
+  document.getElementById("sos-sms").href = `sms:${dialNumber}?body=${smsBody}`;
+}
+
+function showSosPanelContent(title, text, { confirming = false } = {}) {
+  sosPanelTitle.textContent = title;
+  sosPanelText.textContent = text;
+  sosConfirmActions.hidden = !confirming;
+  sosContacts.hidden = confirming;
+  sosClose.hidden = confirming;
+  sosPanel.hidden = false;
+}
+
+function renderSosPanel() {
+  if (sosPanelView === null) {
+    sosPanel.hidden = true;
+    return;
+  }
+  if (sosPanelView.name === "confirm") {
+    showSosPanelContent(
+      "Send an SOS alert?",
+      "Everyone with BITS open will be alerted straight away.",
+      { confirming: true }
+    );
+    return;
+  }
+  if (sosPanelView.name === "failed") {
+    showSosPanelContent(
+      "SOS NOT sent",
+      "BITS can't be reached and your alert was not saved. Call or text now, then press SOS to try again."
+    );
+    return;
+  }
+
+  const record = activeSos.find((candidate) => candidate.id === sosPanelView.id);
+  if (!record) {
+    sosPanelView = null;
+    sosPanel.hidden = true;
+  } else if (record.synced) {
+    showSosPanelContent(
+      "SOS sent",
+      "Anyone with BITS open will see your alert, but this doesn't confirm someone has read it. If you're in immediate danger, call or text as well."
+    );
+  } else {
+    showSosPanelContent(
+      "SOS NOT sent yet: no data connection",
+      "Your alert is saved on this device and BITS will keep trying to send it. Call or text now, as these may work without internet."
+    );
+  }
+}
+
+function createSosAlert(record) {
+  const item = document.createElement("li");
+  item.className = "sos-alert";
+  const isOwn = record.data.sender_id === currentUserId;
+  const time = new Date(record.created_at).toLocaleTimeString([], { timeStyle: "short" });
+
+  const text = document.createElement("p");
+  if (isOwn) {
+    const state = record.synced ? "Sent" : "Not sent yet";
+    text.textContent = `Your SOS · ${time} · ${state}`;
+  } else {
+    text.textContent = `SOS from ${record.data.sender_name ?? "Unknown"} · ${time}`;
+  }
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Mark resolved";
+  button.addEventListener("click", () => resolveSos(record.id));
+  item.append(text, button);
+  return item;
+}
+
+function renderSos(records) {
+  activeSos = records.filter((record) => record.data.type === "sos").reverse();
+  const snapshot = JSON.stringify(activeSos.map((record) => [record.id, record.synced]));
+  if (snapshot !== renderedSos) {
+    renderedSos = snapshot;
+    sosAlerts.replaceChildren(...activeSos.map(createSosAlert));
+    renderSosPanel();
+  }
+}
+
+async function resolveSos(sosId) {
+  if (!window.confirm("Mark this SOS as resolved for everyone?")) {
+    return;
+  }
+  try {
+    await requestJson(`/api/sos/${encodeURIComponent(sosId)}/resolve`, { method: "POST" });
+    await Promise.all([refreshRecords(), refreshStatus()]);
+  } catch (error) {
+    console.warn(error);
+    window.alert("Couldn't mark the SOS as resolved. Please try again.");
+  }
+}
+
+async function sendSos() {
+  sosSend.disabled = true;
+  try {
+    const record = await requestJson("/api/records", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "sos" }),
+    });
+    activeSos = [record, ...activeSos];
+    sosPanelView = { name: "result", id: record.id };
+    renderSosPanel();
+  } catch (error) {
+    console.warn(error);
+    sosPanelView = { name: "failed" };
+    renderSosPanel();
+  } finally {
+    sosSend.disabled = false;
+  }
+  refreshRecords().catch(console.warn);
+  refreshStatus();
+}
+
 function wasNotificationPromptDismissed() {
   try {
     return sessionStorage.getItem(NOTIFICATION_DISMISSED_KEY) === "true";
@@ -267,12 +410,13 @@ function updateNotificationPrompt() {
     wasNotificationPromptDismissed();
 }
 
-function showNotification(title, body, tag, openRecord) {
+function showNotification(title, body, tag, openRecord, stayOpen = false) {
   try {
     const notification = new Notification(title, {
       body,
       tag,
       icon: "/static/favicon.svg",
+      requireInteraction: stayOpen,
     });
     notification.onclick = () => {
       window.focus();
@@ -293,6 +437,10 @@ function openConversation(senderId) {
 
 function announceRecord(record) {
   const sender = record.data.sender_name ?? "Someone";
+  if (record.data.type === "sos") {
+    showNotification(`SOS from ${sender}`, "Open BITS now.", record.id, () => {}, true);
+    return;
+  }
   if (record.data.type === "message") {
     // Message text stays out of the alert, so it can't show on a locked or shared screen.
     showNotification(`New message from ${sender}`, "Open BITS to read it.", record.id, () =>
@@ -322,6 +470,7 @@ function notifyAboutNewRecords(records) {
     (record) =>
       record.data.sender_id !== currentUserId &&
       (record.data.type === "notice" ||
+        record.data.type === "sos" ||
         (record.data.type === "message" && record.data.recipient_id === currentUserId))
   );
 
@@ -333,7 +482,11 @@ function notifyAboutNewRecords(records) {
   if (!notificationsSupported || Notification.permission !== "granted") {
     return;
   }
-  const toAnnounce = unseen.filter((record) => !isRecordOnScreen(record));
+  // SOS alerts always show on their own, and are never folded into a summary.
+  unseen.filter((record) => record.data.type === "sos").forEach(announceRecord);
+  const toAnnounce = unseen.filter(
+    (record) => record.data.type !== "sos" && !isRecordOnScreen(record)
+  );
   if (toAnnounce.length > MAX_SEPARATE_NOTIFICATIONS) {
     showNotification(`${toAnnounce.length} new updates`, "Open BITS to see them.", "bits-summary", () => {});
     return;
@@ -345,6 +498,7 @@ async function refreshRecords() {
   const records = await requestJson("/api/records");
   records.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
   notifyAboutNewRecords(records);
+  renderSos(records);
 
   allMessages = records.filter((r) => r.data.type === "message");
   const notices = records.filter((r) => r.data.type === "notice").reverse();
@@ -629,6 +783,22 @@ checklistForm.addEventListener("submit", async (event) => {
   }
 });
 
+sosButton.addEventListener("click", () => {
+  const ownSos = activeSos.find((record) => record.data.sender_id === currentUserId);
+  // A second press shows the existing alert instead of sending a duplicate.
+  sosPanelView = ownSos ? { name: "result", id: ownSos.id } : { name: "confirm" };
+  renderSosPanel();
+});
+sosSend.addEventListener("click", sendSos);
+document.getElementById("sos-cancel").addEventListener("click", () => {
+  sosPanelView = null;
+  renderSosPanel();
+});
+sosClose.addEventListener("click", () => {
+  sosPanelView = null;
+  renderSosPanel();
+});
+
 notificationEnable.addEventListener("click", async () => {
   const permission = await Notification.requestPermission();
   if (permission === "denied") {
@@ -694,8 +864,13 @@ setInterval(() => {
   if (!document.hidden || wantsAlerts) {
     refreshRecords().catch(console.warn);
   }
+  // Keep retrying an unsent SOS quickly, rather than waiting for the slower status check.
+  if (activeSos.some((r) => r.data.sender_id === currentUserId && !r.synced)) {
+    refreshStatus();
+  }
 }, RECORD_CHECK_MS);
 
+setUpSosContacts();
 updateNotificationPrompt();
 showChecklist(DEFAULT_CHECKLIST);
 refreshStatus();

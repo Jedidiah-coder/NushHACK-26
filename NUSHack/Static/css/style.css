@@ -21,6 +21,11 @@
   --online: #4ade80;
   --offline: #fbbf24;
   --error: #ff9c94;
+  --sos: #d32f2f;
+  --sos-hover: #a81f1f;
+  --sos-text: #ffffff;
+  --sos-surface: #3a1518;
+  --sos-border: #e57373;
 }
 
 * {
@@ -166,6 +171,82 @@ ul {
 
 .user-menu button[type="submit"]:hover {
   background: var(--hover);
+}
+
+.sos-button {
+  border-color: var(--sos);
+  background: var(--sos);
+  color: var(--sos-text);
+  font-weight: 700;
+}
+
+.sos-button:hover {
+  border-color: var(--sos-hover);
+  background: var(--sos-hover);
+}
+
+.sos-panel {
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 2px solid var(--sos-border);
+  border-radius: 6px;
+  background: var(--sos-surface);
+}
+
+.sos-panel p {
+  margin: 0 0 8px;
+}
+
+.sos-panel-title {
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.sos-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sos-contact {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 8px 16px;
+  border-radius: 6px;
+  background: var(--sos);
+  color: var(--sos-text);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.sos-contact:hover {
+  background: var(--sos-hover);
+}
+
+.sos-alerts {
+  margin: 0;
+}
+
+.sos-alert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 2px solid var(--sos-border);
+  border-radius: 6px;
+  background: var(--sos-surface);
+  overflow-wrap: anywhere;
+}
+
+.sos-alert p {
+  flex: 1 1 200px;
+  margin: 0;
+  font-weight: 700;
 }
 
 .notification-prompt {
