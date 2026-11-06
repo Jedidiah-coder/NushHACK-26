@@ -309,7 +309,8 @@ def save_new_record(data, user):
     sync_pending_records()
 
     with data_lock:
-        return next(r for r in load_records() if r["id"] == record["id"])
+        # A reset can clear the file while this record is uploading.
+        return next((r for r in load_records() if r["id"] == record["id"]), record)
 
 
 def find_taken_down_notices(records):
@@ -556,6 +557,14 @@ def create_record():
     if error:
         return jsonify(error=error), 400
     return jsonify(save_new_record(prepared, user)), 201
+
+
+@app.route("/api/reset-data", methods=["POST"])
+def reset_data():
+    # Only clears this computer's data.json. Nothing is deleted from Supabase.
+    with data_lock:
+        save_store([])
+    return jsonify(reset=True)
 
 
 @app.route("/api/sos/<sos_id>/resolve", methods=["POST"])

@@ -783,6 +783,39 @@ checklistForm.addEventListener("submit", async (event) => {
   }
 });
 
+document.getElementById("reset-data").addEventListener("click", async () => {
+  const resetResult = document.getElementById("reset-result");
+  resetResult.textContent = "";
+
+  let lossWarning = "Anything not yet uploaded will be permanently lost.";
+  try {
+    const { pending } = await requestJson("/api/status");
+    lossWarning =
+      pending > 0
+        ? `${pending} record(s) not yet uploaded will be permanently lost.`
+        : "No records are waiting to upload.";
+  } catch (error) {
+    console.warn(error);
+  }
+
+  const confirmed = window.confirm(
+    `Factory reset your data?\n\nThis erases the saved data file on this computer. ${lossWarning}\n\nRecords already in Supabase are not deleted and will download again when BITS is online.`
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    await requestJson("/api/reset-data", { method: "POST" });
+    resetResult.textContent =
+      "Local data reset. Records already in Supabase will download again when BITS is online.";
+    await Promise.all([refreshRecords(), refreshStatus(), refreshUsers()]);
+  } catch (error) {
+    console.warn(error);
+    resetResult.textContent = "Couldn't reset your data. Please try again.";
+  }
+});
+
 sosButton.addEventListener("click", () => {
   const ownSos = activeSos.find((record) => record.data.sender_id === currentUserId);
   // A second press shows the existing alert instead of sending a duplicate.

@@ -249,6 +249,22 @@ ul {
   font-weight: 700;
 }
 
+.data-reset {
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+.data-reset button {
+  border-color: var(--sos-border);
+  color: var(--error);
+}
+
+.data-reset p {
+  margin: 8px 0 0;
+}
+
 .notification-prompt {
   display: flex;
   flex-wrap: wrap;
