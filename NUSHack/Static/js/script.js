@@ -49,12 +49,15 @@ const NOTIFICATIONS_BLOCKED_TEXT =
   "Notifications are blocked. To turn them on, allow them for this site in your browser's settings.";
 const MAP_STATUSES = { unchecked: "Unchecked", safe: "Safe", na: "NA", dangerous: "Dangerous" };
 // The grid and limits match the checks in app.py.
-const MAP_COLUMNS = 24;
-const MAP_ROWS = 16;
-const MIN_MAP_ROOM_WIDTH = 3;
-const MIN_MAP_ROOM_HEIGHT = 2;
+const DEFAULT_MAP_COLUMNS = 24;
+const DEFAULT_MAP_ROWS = 16;
+const MIN_MAP_COLUMNS = 4;
+const MAX_MAP_COLUMNS = 60;
+const MIN_MAP_ROWS = 4;
+const MAX_MAP_ROWS = 40;
 const MAX_MAP_LEVELS = 20;
 const MAX_MAP_ROOMS_PER_LEVEL = 60;
+const MAP_ARROW_STEPS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 // Used until someone saves their own version with the Redesign map button.
 const DEFAULT_MAP_LEVELS = [
   {
@@ -157,6 +160,12 @@ const mapEditor = document.getElementById("map-editor");
 const mapLevelName = document.getElementById("map-level-name");
 const mapRoomFields = document.getElementById("map-room-fields");
 const mapRoomName = document.getElementById("map-room-name");
+// A server started before an update still sends the older page, without these three.
+const mapColumnsInput = document.getElementById("map-columns");
+const mapRowsInput = document.getElementById("map-rows");
+const mapReshapeButton = document.getElementById("map-reshape-room");
+const mapCursor = document.createElement("span");
+mapCursor.className = "map-cursor";
 
 const currentUserId = document.body.dataset.userId;
 const currentUserIsAdmin = document.body.dataset.isAdmin === "true";
@@ -195,6 +204,8 @@ let mapSelectedRoomId = null;
 // A private copy while redesigning, so nobody sees the map until it's saved.
 let mapDraft = null;
 let mapDraftBaseId = null;
+let mapReshaping = false;
+let mapCursorCell = { x: 0, y: 0 };
 let renderedMap = "";
 const defaultSosPhone = document.body.dataset.sosPhone;
 let sosPhone = defaultSosPhone;
@@ -2374,38 +2385,352 @@ function countClashingRooms(level) {
   return level.rooms.filter((room) => hasMapRoomClash(room.id)).length;
 }
 
-function placeMapRoom(element, room) {
-  element.style.left = `${(room.x / MAP_COLUMNS) * 100}%`;
-  element.style.top = `${(room.y / MAP_ROWS) * 100}%`;
-  element.style.width = `${(room.w / MAP_COLUMNS) * 100}%`;
-  element.style.height = `${(room.h / MAP_ROWS) * 100}%`;
+// Levels saved before maps could be resized don't have a size of their own.
+function getMapSize(level) {
+  return { columns: level.columns ?? DEFAULT_MAP_COLUMNS, rows: level.rows ?? DEFAULT_MAP_ROWS };
 }
 
-function fitsOnMap(shape, roomId, rooms) {
+// A room is a box (x, y, w, h). An irregular one also has a mask: a string of 0s and 1s per row of the box.
+function roomHasCell(room, x, y) {
+  const column = x - room.x;
+  const row = y - room.y;
+  return (
+    column >= 0 &&
+    row >= 0 &&
+    column < room.w &&
+    row < room.h &&
+    (!room.mask || room.mask[row]?.[column] === "1")
+  );
+}
+
+function listRoomCells(room) {
+  const cells = [];
+  for (let y = room.y; y < room.y + room.h; y += 1) {
+    for (let x = room.x; x < room.x + room.w; x += 1) {
+      if (roomHasCell(room, x, y)) {
+        cells.push([x, y]);
+      }
+    }
+  }
+  return cells;
+}
+
+function roomsOverlap(first, second) {
+  const bottom = Math.min(first.y + first.h, second.y + second.h);
+  const right = Math.min(first.x + first.w, second.x + second.w);
+  for (let y = Math.max(first.y, second.y); y < bottom; y += 1) {
+    for (let x = Math.max(first.x, second.x); x < right; x += 1) {
+      if (roomHasCell(first, x, y) && roomHasCell(second, x, y)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Returns the room's outer edge, plus the edge of any holes, as loops of corners inside its box.
+function traceRoomOutline(room) {
+  const isFilled = (x, y) => roomHasCell(room, room.x + x, room.y + y);
+  const edgesFrom = new Map();
+  const addEdge = (fromX, fromY, toX, toY) => {
+    const key = `${fromX},${fromY}`;
+    edgesFrom.set(key, [...(edgesFrom.get(key) ?? []), [toX, toY]]);
+  };
+  for (let y = 0; y < room.h; y += 1) {
+    for (let x = 0; x < room.w; x += 1) {
+      if (isFilled(x, y)) {
+        if (!isFilled(x, y - 1)) addEdge(x, y, x + 1, y);
+        if (!isFilled(x + 1, y)) addEdge(x + 1, y, x + 1, y + 1);
+        if (!isFilled(x, y + 1)) addEdge(x + 1, y + 1, x, y + 1);
+        if (!isFilled(x - 1, y)) addEdge(x, y + 1, x, y);
+      }
+    }
+  }
+
+  const loops = [];
+  for (const [startKey, edges] of edgesFrom) {
+    while (edges.length > 0) {
+      const loop = [];
+      let key = startKey;
+      do {
+        const next = edgesFrom.get(key).pop();
+        loop.push(next);
+        key = next.join(",");
+      } while (key !== startKey);
+      // Corners only: points partway along a straight wall add nothing.
+      loops.push(
+        loop.filter((point, index) => {
+          const before = loop.at(index - 1);
+          const after = loop[(index + 1) % loop.length];
+          return !(
+            (before[0] === point[0] && point[0] === after[0]) ||
+            (before[1] === point[1] && point[1] === after[1])
+          );
+        })
+      );
+    }
+  }
+  return loops;
+}
+
+function buildRoomClipPath(room, loops) {
+  const first = loops[0][0];
+  // A clip path is one line, so it travels out to each hole and back along the same path, which adds no area.
+  const points = loops.flatMap((loop, index) => [...loop, loop[0], ...(index > 0 ? [first] : [])]);
+  const coordinates = points.map(([x, y]) => `${(x / room.w) * 100}% ${(y / room.h) * 100}%`);
+  return `polygon(evenodd, ${coordinates.join(", ")})`;
+}
+
+// The biggest rectangle in the room, so its label never lands in a notch.
+function findRoomLabelArea(room) {
+  if (!room.mask) {
+    return { x: 0, y: 0, w: room.w, h: room.h };
+  }
+  const heights = new Array(room.w).fill(0);
+  let best = { x: 0, y: 0, w: 0, h: 0 };
+  for (let y = 0; y < room.h; y += 1) {
+    for (let x = 0; x < room.w; x += 1) {
+      heights[x] = roomHasCell(room, room.x + x, room.y + y) ? heights[x] + 1 : 0;
+    }
+    for (let left = 0; left < room.w; left += 1) {
+      let height = heights[left];
+      for (let right = left; right < room.w && height > 0; right += 1) {
+        height = Math.min(height, heights[right]);
+        const width = right - left + 1;
+        const area = width * height;
+        const bestArea = best.w * best.h;
+        // Between equal areas the wider one, because text reads better across than down.
+        if (area > bestArea || (area === bestArea && width > best.w)) {
+          best = { x: left, y: y - height + 1, w: width, h: height };
+        }
+      }
+    }
+  }
+  return best;
+}
+
+function placeMapRoom(element, room) {
+  const { columns, rows } = getMapSize(getMapLevel());
+  element.style.left = `${(room.x / columns) * 100}%`;
+  element.style.top = `${(room.y / rows) * 100}%`;
+  element.style.width = `${(room.w / columns) * 100}%`;
+  element.style.height = `${(room.h / rows) * 100}%`;
+
+  const loops = traceRoomOutline(room);
+  // Clipping also limits clicks to the room's shape, so a room in a notch can still be clicked.
+  element.style.clipPath = room.mask ? buildRoomClipPath(room, loops) : "";
+  element.querySelector("svg").setAttribute("viewBox", `0 0 ${room.w} ${room.h}`);
+  element
+    .querySelector("path")
+    .setAttribute("d", loops.map((loop) => `M${loop.map((point) => point.join(" ")).join("L")}Z`).join(""));
+
+  const area = findRoomLabelArea(room);
+  const label = element.querySelector(".map-room-label");
+  label.style.left = `${(area.x / room.w) * 100}%`;
+  label.style.top = `${(area.y / room.h) * 100}%`;
+  label.style.width = `${(area.w / room.w) * 100}%`;
+  label.style.height = `${(area.h / room.h) * 100}%`;
+}
+
+function fitsOnMap(shape, roomId, level) {
+  const { columns, rows } = getMapSize(level);
   return (
     shape.x >= 0 &&
     shape.y >= 0 &&
-    shape.w >= MIN_MAP_ROOM_WIDTH &&
-    shape.h >= MIN_MAP_ROOM_HEIGHT &&
-    shape.x + shape.w <= MAP_COLUMNS &&
-    shape.y + shape.h <= MAP_ROWS &&
-    rooms.every(
-      (other) =>
-        other.id === roomId ||
-        shape.x + shape.w <= other.x ||
-        other.x + other.w <= shape.x ||
-        shape.y + shape.h <= other.y ||
-        other.y + other.h <= shape.y
-    )
+    shape.w >= 1 &&
+    shape.h >= 1 &&
+    shape.x + shape.w <= columns &&
+    shape.y + shape.h <= rows &&
+    level.rooms.every((other) => other.id === roomId || !roomsOverlap(shape, other))
   );
 }
 
 // Rooms stop at the last spot that fits, so they can't overlap or leave the map.
 function reshapeMapRoom(element, room, shape) {
-  if (fitsOnMap(shape, room.id, getMapLevel().rooms)) {
+  if (fitsOnMap({ ...room, ...shape }, room.id, getMapLevel())) {
     Object.assign(room, shape);
     placeMapRoom(element, room);
   }
+}
+
+function setRoomCells(room, cells) {
+  const xs = cells.map(([x]) => x);
+  const ys = cells.map(([, y]) => y);
+  room.x = Math.min(...xs);
+  room.y = Math.min(...ys);
+  room.w = Math.max(...xs) - room.x + 1;
+  room.h = Math.max(...ys) - room.y + 1;
+  if (cells.length === room.w * room.h) {
+    delete room.mask;
+    return;
+  }
+  const filled = new Set(cells.map((cell) => cell.join(",")));
+  room.mask = Array.from({ length: room.h }, (_, row) =>
+    Array.from({ length: room.w }, (_, column) =>
+      filled.has(`${room.x + column},${room.y + row}`) ? "1" : "0"
+    ).join("")
+  );
+}
+
+function areCellsConnected(cells) {
+  const remaining = new Set(cells.map((cell) => cell.join(",")));
+  const waiting = [cells[0]];
+  while (waiting.length > 0) {
+    const [x, y] = waiting.pop();
+    if (remaining.delete(`${x},${y}`)) {
+      waiting.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+    }
+  }
+  return remaining.size === 0;
+}
+
+function changeRoomCell(room, x, y, adding) {
+  if (roomHasCell(room, x, y) === adding) {
+    return;
+  }
+  if (adding) {
+    const owner = getMapLevel().rooms.find((other) => other.id !== room.id && roomHasCell(other, x, y));
+    if (owner) {
+      mapError.textContent = `That square is part of ${owner.name}.`;
+      return;
+    }
+  }
+  const cells = adding
+    ? [...listRoomCells(room), [x, y]]
+    : listRoomCells(room).filter(([cellX, cellY]) => cellX !== x || cellY !== y);
+  if (cells.length === 0) {
+    mapError.textContent = "A room needs at least one square. Use Delete room to remove it.";
+    return;
+  }
+  if (!areCellsConnected(cells)) {
+    mapError.textContent = adding
+      ? "Rooms have to stay in one piece, so add squares next to the room."
+      : "Removing that square would split the room in two.";
+    return;
+  }
+  setRoomCells(room, cells);
+  mapError.textContent = "";
+  renderMap();
+}
+
+function placeMapCursor() {
+  const { columns, rows } = getMapSize(getMapLevel());
+  mapCursor.style.left = `${(mapCursorCell.x / columns) * 100}%`;
+  mapCursor.style.top = `${(mapCursorCell.y / rows) * 100}%`;
+  mapCursor.style.width = `${100 / columns}%`;
+  mapCursor.style.height = `${100 / rows}%`;
+}
+
+function getSelectedDraftRoom() {
+  return getMapLevel().rooms.find((room) => room.id === mapSelectedRoomId);
+}
+
+function getMapCellAt(event) {
+  const floor = mapFloor.getBoundingClientRect();
+  const { columns, rows } = getMapSize(getMapLevel());
+  const across = (event.clientX - floor.left - mapFloor.clientLeft) / mapFloor.clientWidth;
+  const down = (event.clientY - floor.top - mapFloor.clientTop) / mapFloor.clientHeight;
+  return {
+    x: Math.min(Math.max(Math.floor(across * columns), 0), columns - 1),
+    y: Math.min(Math.max(Math.floor(down * rows), 0), rows - 1),
+  };
+}
+
+function startReshapeDrag(event) {
+  if (!mapReshaping || event.button !== 0) {
+    return;
+  }
+  const room = getSelectedDraftRoom();
+  let current = getMapCellAt(event);
+  const adding = !roomHasCell(room, current.x, current.y);
+  mapFloor.setPointerCapture(event.pointerId);
+  mapCursorCell = current;
+  placeMapCursor();
+  changeRoomCell(room, current.x, current.y, adding);
+
+  const onMove = (moveEvent) => {
+    const target = getMapCellAt(moveEvent);
+    // A fast drag skips squares. Walking one square at a time keeps the room in one piece.
+    while (current.x !== target.x || current.y !== target.y) {
+      current =
+        current.x !== target.x
+          ? { x: current.x + Math.sign(target.x - current.x), y: current.y }
+          : { x: current.x, y: current.y + Math.sign(target.y - current.y) };
+      changeRoomCell(room, current.x, current.y, adding);
+    }
+    mapCursorCell = current;
+    placeMapCursor();
+  };
+  const onEnd = () => {
+    mapFloor.removeEventListener("pointermove", onMove);
+    mapFloor.removeEventListener("pointerup", onEnd);
+    mapFloor.removeEventListener("pointercancel", onEnd);
+  };
+  mapFloor.addEventListener("pointermove", onMove);
+  mapFloor.addEventListener("pointerup", onEnd);
+  mapFloor.addEventListener("pointercancel", onEnd);
+}
+
+function stopReshaping() {
+  mapReshaping = false;
+  renderMap();
+  mapReshapeButton?.focus();
+}
+
+function handleReshapeKey(event) {
+  if (!mapReshaping) {
+    return;
+  }
+  const step = MAP_ARROW_STEPS[event.key];
+  if (event.key === "Escape") {
+    stopReshaping();
+  } else if (step) {
+    event.preventDefault();
+    const { columns, rows } = getMapSize(getMapLevel());
+    mapCursorCell = {
+      x: Math.min(Math.max(mapCursorCell.x + step[0], 0), columns - 1),
+      y: Math.min(Math.max(mapCursorCell.y + step[1], 0), rows - 1),
+    };
+    placeMapCursor();
+  } else if (event.key === " " || event.key === "Enter") {
+    event.preventDefault();
+    const room = getSelectedDraftRoom();
+    const { x, y } = mapCursorCell;
+    changeRoomCell(room, x, y, !roomHasCell(room, x, y));
+  }
+}
+
+function applyDraftMapSize() {
+  const level = getMapLevel();
+  const current = getMapSize(level);
+  const columns = Number(mapColumnsInput.value);
+  const rows = Number(mapRowsInput.value);
+  let problem = null;
+  if (
+    !Number.isInteger(columns) ||
+    !Number.isInteger(rows) ||
+    columns < MIN_MAP_COLUMNS ||
+    columns > MAX_MAP_COLUMNS ||
+    rows < MIN_MAP_ROWS ||
+    rows > MAX_MAP_ROWS
+  ) {
+    problem = `Levels must be ${MIN_MAP_COLUMNS} to ${MAX_MAP_COLUMNS} squares wide and ${MIN_MAP_ROWS} to ${MAX_MAP_ROWS} squares tall.`;
+  } else {
+    const inTheWay = level.rooms.find((room) => room.x + room.w > columns || room.y + room.h > rows);
+    if (inTheWay) {
+      problem = `${inTheWay.name} is in the way. Move or shrink it first.`;
+    }
+  }
+  if (problem) {
+    mapError.textContent = problem;
+    setInputValue(mapColumnsInput, String(current.columns));
+    setInputValue(mapRowsInput, String(current.rows));
+    return;
+  }
+  level.columns = columns;
+  level.rows = rows;
+  mapError.textContent = "";
+  renderMap();
 }
 
 function startMapRoomDrag(event, element, room, resizeHandle) {
@@ -2413,17 +2738,20 @@ function startMapRoomDrag(event, element, room, resizeHandle) {
     return;
   }
   selectDraftRoom(room.id);
-  const handleBox = resizeHandle.getBoundingClientRect();
-  const isResizing = event.clientX >= handleBox.left && event.clientY >= handleBox.top;
+  // Only rectangular rooms have a handle, because resizing doesn't say what an irregular shape should do.
+  const handleBox = resizeHandle?.getBoundingClientRect();
+  const isResizing =
+    resizeHandle && event.clientX >= handleBox.left && event.clientY >= handleBox.top;
   const startX = event.clientX;
   const startY = event.clientY;
   const start = { x: room.x, y: room.y, w: room.w, h: room.h };
+  const size = getMapSize(getMapLevel());
   element.setPointerCapture(event.pointerId);
 
   const onMove = (moveEvent) => {
     const floor = mapFloor.getBoundingClientRect();
-    const columns = Math.round((moveEvent.clientX - startX) / (floor.width / MAP_COLUMNS));
-    const rows = Math.round((moveEvent.clientY - startY) / (floor.height / MAP_ROWS));
+    const columns = Math.round((moveEvent.clientX - startX) / (floor.width / size.columns));
+    const rows = Math.round((moveEvent.clientY - startY) / (floor.height / size.rows));
     // A fast drag can jump past the edge, so it stops at the edge instead of not moving at all.
     const limit = (value, lowest, highest) => Math.min(Math.max(value, lowest), highest);
     reshapeMapRoom(
@@ -2432,13 +2760,13 @@ function startMapRoomDrag(event, element, room, resizeHandle) {
       isResizing
         ? {
             ...start,
-            w: limit(start.w + columns, MIN_MAP_ROOM_WIDTH, MAP_COLUMNS - start.x),
-            h: limit(start.h + rows, MIN_MAP_ROOM_HEIGHT, MAP_ROWS - start.y),
+            w: limit(start.w + columns, 1, size.columns - start.x),
+            h: limit(start.h + rows, 1, size.rows - start.y),
           }
         : {
             ...start,
-            x: limit(start.x + columns, 0, MAP_COLUMNS - start.w),
-            y: limit(start.y + rows, 0, MAP_ROWS - start.h),
+            x: limit(start.x + columns, 0, size.columns - start.w),
+            y: limit(start.y + rows, 0, size.rows - start.h),
           }
     );
   };
@@ -2453,14 +2781,16 @@ function startMapRoomDrag(event, element, room, resizeHandle) {
 }
 
 function handleMapRoomKey(event, element, room) {
-  const steps = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
-  const step = steps[event.key];
+  const step = MAP_ARROW_STEPS[event.key];
   if (!step) {
     return;
   }
   event.preventDefault();
   const shape = { x: room.x, y: room.y, w: room.w, h: room.h };
   if (event.shiftKey) {
+    if (room.mask) {
+      return;
+    }
     shape.w += step[0];
     shape.h += step[1];
   } else {
@@ -2484,20 +2814,35 @@ function createMapRoom(room) {
   const statusLabel = clash ? `${MAP_STATUSES[status]} · Review` : MAP_STATUSES[status];
   element.setAttribute("aria-label", `${room.name}: ${statusLabel}`);
   element.setAttribute("aria-pressed", String(room.id === mapSelectedRoomId));
-  placeMapRoom(element, room);
 
+  const outline = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  outline.setAttribute("class", "map-room-outline");
+  outline.setAttribute("aria-hidden", "true");
+  outline.setAttribute("preserveAspectRatio", "none");
+  outline.append(document.createElementNS("http://www.w3.org/2000/svg", "path"));
   const name = document.createElement("span");
   name.className = "map-room-name";
   name.textContent = room.name;
+  const statusText = document.createElement("span");
+  statusText.className = "map-room-status";
+  statusText.textContent = statusLabel;
   const label = document.createElement("span");
-  label.className = "map-room-status";
-  label.textContent = statusLabel;
-  element.append(name, label);
+  label.className = "map-room-label";
+  label.append(name, statusText);
+  element.append(outline, label);
+  placeMapRoom(element, room);
 
   if (mapDraft) {
-    const resizeHandle = document.createElement("span");
-    resizeHandle.className = "map-room-resize";
-    element.append(resizeHandle);
+    let resizeHandle = null;
+    if (!room.mask) {
+      resizeHandle = document.createElement("span");
+      resizeHandle.className = "map-room-resize";
+      element.append(resizeHandle);
+    }
+    // While reshaping, the floor takes every press and the keyboard moves a square instead.
+    if (mapReshaping) {
+      element.tabIndex = -1;
+    }
     element.addEventListener("pointerdown", (event) =>
       startMapRoomDrag(event, element, room, resizeHandle)
     );
@@ -2676,6 +3021,14 @@ function renderMapEditor(level, room) {
   if (room) {
     setInputValue(mapRoomName, room.name);
   }
+  if (mapColumnsInput) {
+    const { columns, rows } = getMapSize(level);
+    setInputValue(mapColumnsInput, String(columns));
+    setInputValue(mapRowsInput, String(rows));
+    mapReshapeButton.textContent = mapReshaping ? "Done reshaping" : "Reshape room";
+    mapReshapeButton.setAttribute("aria-pressed", String(mapReshaping));
+    document.getElementById("map-reshape-hint").hidden = !mapReshaping;
+  }
 }
 
 function renderMap() {
@@ -2688,6 +3041,8 @@ function renderMap() {
   mapLevelId = level.id;
   const room = level.rooms.find((candidate) => candidate.id === mapSelectedRoomId) ?? null;
   mapSelectedRoomId = room?.id ?? null;
+  // Reshaping needs a room to work on, so it ends when the selection does.
+  mapReshaping = editing && room !== null && mapReshaping;
 
   // Rebuilding only on a real change keeps focus and any selected text in place.
   const snapshot = JSON.stringify([
@@ -2695,6 +3050,7 @@ function renderMap() {
     levels,
     mapLevelId,
     mapSelectedRoomId,
+    mapReshaping,
     [...mapStatusHeads.values()].map((heads) => heads.map((record) => [record.id, record.synced])),
     listIds(mapLayoutHeads),
   ]);
@@ -2705,8 +3061,20 @@ function renderMap() {
 
   const focused = document.activeElement?.dataset?.mapFocus;
   mapLevelButtons.replaceChildren(...levels.map(createMapLevelButton));
-  mapFloor.replaceChildren(...level.rooms.map(createMapRoom));
+  const { columns, rows } = getMapSize(level);
+  mapFloor.parentElement.style.setProperty("--map-columns", columns);
+  mapFloor.parentElement.style.setProperty("--map-rows", rows);
+  mapFloor.replaceChildren(...level.rooms.map(createMapRoom), ...(mapReshaping ? [mapCursor] : []));
+  placeMapCursor();
   mapFloor.dataset.editing = String(editing);
+  mapFloor.dataset.reshaping = String(mapReshaping);
+  if (mapReshaping) {
+    mapFloor.tabIndex = 0;
+    mapFloor.setAttribute("aria-label", `Reshaping ${room.name}. ${document.getElementById("map-reshape-hint").textContent}`);
+  } else {
+    mapFloor.removeAttribute("tabindex");
+    mapFloor.removeAttribute("aria-label");
+  }
   mapEmpty.hidden = level.rooms.length > 0;
   mapEditButton.hidden = editing;
   mapLegend.hidden = editing;
@@ -2755,11 +3123,12 @@ function createMapId(prefix) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function findFreeMapSpot(rooms) {
-  for (const [w, h] of [[5, 3], [MIN_MAP_ROOM_WIDTH, MIN_MAP_ROOM_HEIGHT]]) {
-    for (let y = 0; y + h <= MAP_ROWS; y += 1) {
-      for (let x = 0; x + w <= MAP_COLUMNS; x += 1) {
-        if (fitsOnMap({ x, y, w, h }, null, rooms)) {
+function findFreeMapSpot(level) {
+  const { columns, rows } = getMapSize(level);
+  for (const [w, h] of [[5, 3], [3, 2], [1, 1]]) {
+    for (let y = 0; y + h <= rows; y += 1) {
+      for (let x = 0; x + w <= columns; x += 1) {
+        if (fitsOnMap({ x, y, w, h }, null, level)) {
           return { x, y, w, h };
         }
       }
@@ -2804,6 +3173,7 @@ function checkDraftNames() {
 
 function closeMapEditor() {
   mapDraft = null;
+  mapReshaping = false;
   mapSelectedRoomId = null;
   mapError.textContent = "";
   renderMap();
@@ -2812,6 +3182,22 @@ function closeMapEditor() {
 if (mapFloor) {
   // Text selected elsewhere on the page can still start the browser's own drag from a room.
   mapFloor.addEventListener("dragstart", (event) => event.preventDefault());
+  mapFloor.addEventListener("pointerdown", startReshapeDrag);
+  mapFloor.addEventListener("keydown", handleReshapeKey);
+  mapColumnsInput?.addEventListener("change", applyDraftMapSize);
+  mapRowsInput?.addEventListener("change", applyDraftMapSize);
+  mapReshapeButton?.addEventListener("click", () => {
+    if (mapReshaping) {
+      stopReshaping();
+      return;
+    }
+    mapReshaping = true;
+    const [x, y] = listRoomCells(getSelectedDraftRoom())[0];
+    mapCursorCell = { x, y };
+    mapError.textContent = "";
+    renderMap();
+    mapFloor.focus({ preventScroll: true });
+  });
   mapEditButton.addEventListener("click", () => {
     mapDraft = structuredClone(mapLevels);
     mapDraftBaseId = mapLayoutId;
@@ -2838,6 +3224,9 @@ if (mapFloor) {
   mapEditor.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && event.target.matches("input")) {
       event.preventDefault();
+      if (event.target === mapColumnsInput || event.target === mapRowsInput) {
+        applyDraftMapSize();
+      }
     }
   });
 
@@ -2847,7 +3236,13 @@ if (mapFloor) {
       return;
     }
     mapError.textContent = "";
-    const level = { id: createMapId("level"), name: `Level ${mapDraft.length + 1}`, rooms: [] };
+    const level = {
+      id: createMapId("level"),
+      name: `Level ${mapDraft.length + 1}`,
+      // Most buildings' floors are about the same size, so a new level starts like this one.
+      ...getMapSize(getMapLevel()),
+      rooms: [],
+    };
     mapDraft.push(level);
     mapLevelId = level.id;
     mapSelectedRoomId = null;
@@ -2868,12 +3263,13 @@ if (mapFloor) {
 
   document.getElementById("map-add-room").addEventListener("click", () => {
     const level = getMapLevel();
-    const spot = level.rooms.length < MAX_MAP_ROOMS_PER_LEVEL ? findFreeMapSpot(level.rooms) : null;
+    const spot = level.rooms.length < MAX_MAP_ROOMS_PER_LEVEL ? findFreeMapSpot(level) : null;
     if (!spot) {
       mapError.textContent = "There's no space for another room. Move, shrink or delete one first.";
       return;
     }
     mapError.textContent = "";
+    mapReshaping = false;
     const room = { id: createMapId("room"), name: `Room ${level.rooms.length + 1}`, ...spot };
     level.rooms.push(room);
     mapSelectedRoomId = room.id;

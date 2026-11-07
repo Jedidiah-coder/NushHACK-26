@@ -264,6 +264,16 @@
           <legend>Level</legend>
           <label for="map-level-name">Level name</label>
           <input id="map-level-name" type="text" maxlength="40" autocomplete="off" required>
+          <div class="map-size">
+            <div>
+              <label for="map-columns">Width (squares)</label>
+              <input id="map-columns" type="number" min="4" max="60" step="1" inputmode="numeric">
+            </div>
+            <div>
+              <label for="map-rows">Height (squares)</label>
+              <input id="map-rows" type="number" min="4" max="40" step="1" inputmode="numeric">
+            </div>
+          </div>
           <div class="editor-actions">
             <button id="map-add-level" type="button">Add level</button>
             <button id="map-level-earlier" type="button">Move earlier</button>
@@ -273,14 +283,16 @@
         </fieldset>
         <fieldset>
           <legend>Rooms</legend>
-          <p class="field-hint">Drag a room to move it, or drag its corner to resize it. With a keyboard, the arrow keys move the selected room and Shift + arrow keys resize it.</p>
+          <p class="field-hint">Drag a room to move it, or drag the corner of a rectangular room to resize it. With a keyboard, the arrow keys move the selected room and Shift + arrow keys resize a rectangular one. Select a room and press Reshape room to give it any shape.</p>
           <div class="editor-actions">
             <button id="map-add-room" type="button">Add room</button>
           </div>
           <div id="map-room-fields" hidden>
             <label for="map-room-name">Room name</label>
             <input id="map-room-name" type="text" maxlength="40" autocomplete="off">
+            <p class="field-hint" id="map-reshape-hint" hidden>Click or drag over empty squares next to the room to add them, or over the room to remove them. With a keyboard, the arrow keys move the highlighted square and Space adds or removes it. Press Escape when you're done.</p>
             <div class="editor-actions">
+              <button id="map-reshape-room" type="button" aria-pressed="false">Reshape room</button>
               <button id="map-delete-room" type="button">Delete room</button>
             </div>
           </div>

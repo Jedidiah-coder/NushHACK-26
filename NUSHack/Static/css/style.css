@@ -1061,15 +1061,18 @@ ul {
   Short screens get a narrower map, so a whole level fits on screen while dragging rooms.
 */
 .map-scroll {
-  max-width: min(60rem, calc((100vh - 6rem) * 1.5));
-  max-width: min(60rem, calc((100dvh - 6rem) * 1.5));
+  /* Set for each level by script.js. */
+  --map-columns: 24;
+  --map-rows: 16;
+  max-width: min(calc(var(--map-columns) * 2.5rem), calc((100vh - 6rem) * var(--map-columns) / var(--map-rows)));
+  max-width: min(calc(var(--map-columns) * 2.5rem), calc((100dvh - 6rem) * var(--map-columns) / var(--map-rows)));
   overflow-x: auto;
 }
 
 .map-floor {
   position: relative;
-  min-width: 36rem;
-  aspect-ratio: 24 / 16;
+  min-width: calc(var(--map-columns) * 1.5rem);
+  aspect-ratio: var(--map-columns) / var(--map-rows);
   border: 1px solid var(--border);
   border-radius: 6px;
   background-color: var(--surface);
@@ -1081,19 +1084,47 @@ ul {
   background-image:
     linear-gradient(to right, var(--border) 1px, transparent 1px),
     linear-gradient(to bottom, var(--border) 1px, transparent 1px);
-  background-size: calc(100% / 24) calc(100% / 16);
+  background-size: calc(100% / var(--map-columns)) calc(100% / var(--map-rows));
+}
+
+.map-floor:focus {
+  outline: none;
+}
+
+.map-floor[data-reshaping="true"] {
+  cursor: crosshair;
+  /* Lets a finger paint squares instead of scrolling the page. */
+  touch-action: none;
+}
+
+/* The floor works out which square was pressed, so a press in a room still reaches it. */
+.map-floor[data-reshaping="true"] .map-room {
+  pointer-events: none;
+}
+
+.map-floor[data-reshaping="true"] .map-room[aria-pressed="false"] {
+  opacity: 0.45;
+}
+
+.map-cursor {
+  display: none;
+  position: absolute;
+  outline: 3px solid var(--link);
+  outline-offset: -3px;
+  pointer-events: none;
+}
+
+.map-floor:focus-visible .map-cursor {
+  display: block;
 }
 
 .map-room {
   position: absolute;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
   min-height: 0;
-  padding: 0.125rem 0.25rem;
+  padding: 0;
   overflow: hidden;
-  border: 2px solid var(--surface);
-  border-radius: 6px;
+  border: 0;
+  border-radius: 0;
   background: var(--status-colour);
   color: var(--status-text);
   font-size: 0.875rem;
@@ -1105,22 +1136,53 @@ ul {
   background: var(--status-colour);
 }
 
-/* Only the border changes, so the label's contrast stays the same. Touch screens would keep it after a tap. */
+.map-room-outline {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* The line sits on the room's edge and the outer half is cut off, so what shows is half this width. */
+.map-room-outline path {
+  fill: none;
+  stroke: var(--surface);
+  stroke-width: 4px;
+  vector-effect: non-scaling-stroke;
+}
+
+.map-room-label {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0.125rem 0.25rem;
+  overflow: hidden;
+}
+
+/* Only the outline changes, so the label's contrast stays the same. Touch screens would keep it after a tap. */
 @media (hover: hover) {
-  .map-room:hover {
-    border-color: var(--text);
+  .map-room:hover .map-room-outline path {
+    stroke: var(--text);
   }
 }
 
-.map-room[aria-pressed="true"] {
-  border-color: var(--text);
-  outline: 2px solid var(--link);
-  outline-offset: -4px;
+.map-room[data-clash="true"] .map-room-outline path {
+  stroke: var(--status-text);
+  stroke-dasharray: 6 4;
 }
 
-.map-room[data-clash="true"] {
-  border-color: var(--status-text);
-  border-style: dashed;
+.map-room[aria-pressed="true"] .map-room-outline path,
+.map-room:focus-visible .map-room-outline path {
+  stroke: var(--link);
+  stroke-dasharray: none;
+  stroke-width: 8px;
+}
+
+/* An irregular room's clipping would cut this off, so its outline shows focus instead. */
+.map-room:focus-visible {
+  outline: none;
 }
 
 .map-clash,
@@ -1254,5 +1316,17 @@ ul {
 
 .map-editor .editor-actions {
   margin-top: 0.5rem;
+}
+
+.map-size {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.map-size input {
+  width: 8rem;
+  min-height: max(44px, 2.75rem);
+  padding: 0.5rem;
 }
 

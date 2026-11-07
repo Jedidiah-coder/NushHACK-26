@@ -55,10 +55,12 @@ FOLLOW_UP_STATUSES = ("open", "in_progress", "fixed")
 MAP_STATUSES = ("unchecked", "safe", "na", "dangerous")
 MAP_ID_PATTERN = r"[A-Za-z0-9_-]{1,64}"
 # These match the map code in script.js.
-MAP_COLUMNS = 24
-MAP_ROWS = 16
-MIN_MAP_ROOM_WIDTH = 3
-MIN_MAP_ROOM_HEIGHT = 2
+DEFAULT_MAP_COLUMNS = 24
+DEFAULT_MAP_ROWS = 16
+MIN_MAP_COLUMNS = 4
+MAX_MAP_COLUMNS = 60
+MIN_MAP_ROWS = 4
+MAX_MAP_ROWS = 40
 MAX_MAP_LEVELS = 20
 MAX_MAP_ROOMS_PER_LEVEL = 60
 MAX_MAP_NAME_LENGTH = 40
@@ -348,19 +350,40 @@ def is_new_map_id(value, seen_ids):
     return True
 
 
-def is_valid_map_room_shape(room):
+def is_valid_map_room_mask(mask, width, height):
+    """Check an irregular room: one string of 0s and 1s per row of the box around the room.
+
+    The room must reach every side of that box and be in one piece. Holes are fine.
+    """
+    if (
+        not isinstance(mask, list)
+        or len(mask) != height
+        or not all(isinstance(row, str) and re.fullmatch(f"[01]{{{width}}}", row) for row in mask)
+    ):
+        return False
+    cells = {(x, y) for y, row in enumerate(mask) for x, value in enumerate(row) if value == "1"}
+    if {x for x, _ in cells} != set(range(width)) or {y for _, y in cells} != set(range(height)):
+        return False
+
+    reached = set()
+    waiting = [next(iter(cells))]
+    while waiting:
+        x, y = waiting.pop()
+        if (x, y) in cells and (x, y) not in reached:
+            reached.add((x, y))
+            waiting += [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+    return reached == cells
+
+
+def is_valid_map_room_shape(room, columns, rows):
     x, y, width, height = (room.get(key) for key in ("x", "y", "w", "h"))
     # Exactly int, because Python also counts True and False as ints.
     if not all(type(number) is int for number in (x, y, width, height)):
         return False
-    return (
-        x >= 0
-        and y >= 0
-        and width >= MIN_MAP_ROOM_WIDTH
-        and height >= MIN_MAP_ROOM_HEIGHT
-        and x + width <= MAP_COLUMNS
-        and y + height <= MAP_ROWS
-    )
+    if x < 0 or y < 0 or width < 1 or height < 1 or x + width > columns or y + height > rows:
+        return False
+    mask = room.get("mask")
+    return mask is None or is_valid_map_room_mask(mask, width, height)
 
 
 def prepare_based_on(data):
@@ -400,6 +423,19 @@ def prepare_map_layout(data):
         level_name = clean_text(level.get("name"))
         if not level_name or len(level_name) > MAX_MAP_NAME_LENGTH:
             return None, name_error
+        # Levels saved before maps could be resized don't have these.
+        columns = level.get("columns", DEFAULT_MAP_COLUMNS)
+        rows = level.get("rows", DEFAULT_MAP_ROWS)
+        if (
+            type(columns) is not int
+            or type(rows) is not int
+            or not MIN_MAP_COLUMNS <= columns <= MAX_MAP_COLUMNS
+            or not MIN_MAP_ROWS <= rows <= MAX_MAP_ROWS
+        ):
+            return None, (
+                f"Levels must be {MIN_MAP_COLUMNS} to {MAX_MAP_COLUMNS} squares wide "
+                f"and {MIN_MAP_ROWS} to {MAX_MAP_ROWS} squares tall."
+            )
         rooms = level.get("rooms")
         if not isinstance(rooms, list) or len(rooms) > MAX_MAP_ROOMS_PER_LEVEL:
             return None, f"Levels can have up to {MAX_MAP_ROOMS_PER_LEVEL} rooms."
@@ -411,12 +447,21 @@ def prepare_map_layout(data):
             room_name = clean_text(room.get("name"))
             if not room_name or len(room_name) > MAX_MAP_NAME_LENGTH:
                 return None, name_error
-            if not is_valid_map_room_shape(room):
+            if not is_valid_map_room_shape(room, columns, rows):
                 return None, shape_error
-            prepared_rooms.append(
-                {"id": room["id"], "name": room_name, **{key: room[key] for key in "xywh"}}
-            )
-        prepared_levels.append({"id": level["id"], "name": level_name, "rooms": prepared_rooms})
+            prepared_room = {"id": room["id"], "name": room_name, **{key: room[key] for key in "xywh"}}
+            if room.get("mask") is not None:
+                prepared_room["mask"] = room["mask"]
+            prepared_rooms.append(prepared_room)
+        prepared_levels.append(
+            {
+                "id": level["id"],
+                "name": level_name,
+                "columns": columns,
+                "rows": rows,
+                "rooms": prepared_rooms,
+            }
+        )
     return {"type": "map_layout", "levels": prepared_levels, **based_on}, None
 
 
