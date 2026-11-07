@@ -16,6 +16,8 @@ To create the first admin, or make an existing account an admin, run this from t
 ```
 python -m flask --app app create-admin
 ```
+
+After logging in online, someone can log in on that device without internet for the next 7 days. Only a one-way hash of their password is kept, in `data.json`, which is never uploaded. Logging in online again renews the 7 days.
 # How it works
 1. Check whether the application is online.
 2. If online:

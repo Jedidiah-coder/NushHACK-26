@@ -1523,7 +1523,7 @@ document.getElementById("reset-data").addEventListener("click", async () => {
   }
 
   const confirmed = window.confirm(
-    "Factory reset your data?\n\nThis erases the saved data file on this computer.\n\nRecords already in Supabase are not deleted and will download again when SecuriLock is online."
+    "Factory reset your data?\n\nThis erases the saved data file on this computer. Everyone will need internet to log in on it again.\n\nRecords already in Supabase are not deleted and will download again when SecuriLock is online."
   );
   if (!confirmed) {
     return;

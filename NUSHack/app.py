@@ -26,7 +26,8 @@ from flask import (
     url_for,
 )
 from postgrest.exceptions import APIError
-from supabase import AuthError, ClientOptions, create_client
+from supabase import AuthError, AuthRetryableError, ClientOptions, create_client
+from werkzeug.security import check_password_hash, generate_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -65,6 +66,13 @@ LAST_SEEN_KEY = "last_seen"
 # Open pages check in every 30 seconds, but browsers slow background tabs to once a minute.
 ONLINE_WINDOW = timedelta(minutes=2)
 SERVICE_UNAVAILABLE = "Can't reach the account service. Check your connection and try again."
+# Limits how long a removed person or an old password could still work while a device is offline.
+OFFLINE_LOGIN_LIFETIME = timedelta(days=7)
+OFFLINE_LOGIN_FAILED = (
+    "Can't check this log-in without internet. Check your password. "
+    f"If you haven't logged in on this device in the last {OFFLINE_LOGIN_LIFETIME.days} days, "
+    "connect to the internet and try again."
+)
 
 SOS_PHONE_PATTERN = r"\+?[0-9][0-9 ()-]{2,19}"
 # Only the starting number. An admin's number from Settings replaces it on every device.
@@ -120,12 +128,13 @@ data_lock = threading.Lock()
 
 def load_store():
     if not DATA_FILE.exists():
-        return {"last_logouts": {}, "users": {}, "records": []}
+        return {"last_logouts": {}, "users": {}, "offline_logins": {}, "records": []}
     stored = json.loads(DATA_FILE.read_text(encoding="utf-8"))
     # Files from before logouts were tracked hold just a list of records.
     if isinstance(stored, list):
-        return {"last_logouts": {}, "users": {}, "records": stored}
+        return {"last_logouts": {}, "users": {}, "offline_logins": {}, "records": stored}
     stored.setdefault("users", {})
+    stored.setdefault("offline_logins", {})
     return stored
 
 
@@ -275,9 +284,17 @@ def load_directory(checking_in_user_id=None):
 
     with data_lock:
         store = load_store()
-        if directory is not None and directory != store["users"]:
-            store["users"] = directory
-            save_store(store)
+        if directory is not None:
+            # A deleted account must stop working on this device too.
+            offline_logins = {
+                email: entry
+                for email, entry in store["offline_logins"].items()
+                if entry["user"]["id"] in directory
+            }
+            if directory != store["users"] or offline_logins != store["offline_logins"]:
+                store["users"] = directory
+                store["offline_logins"] = offline_logins
+                save_store(store)
         return store["users"], check_ins
 
 
@@ -724,7 +741,46 @@ def update_account(user_id, attributes):
         raise AccountError(SERVICE_UNAVAILABLE) from error
 
 
+def is_offline_login_current(entry):
+    return datetime.now(timezone.utc) - datetime.fromisoformat(entry["saved_at"]) < OFFLINE_LOGIN_LIFETIME
+
+
+def save_offline_login(email, password, user):
+    # Only a slow one-way hash is stored. Hashing is slow, so it happens before taking the lock.
+    password_hash = generate_password_hash(password)
+    with data_lock:
+        store = load_store()
+        store["offline_logins"] = {
+            saved_email: entry
+            for saved_email, entry in store["offline_logins"].items()
+            if is_offline_login_current(entry)
+        }
+        store["offline_logins"][email] = {
+            "password_hash": password_hash,
+            "user": user,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+        }
+        save_store(store)
+
+
+def forget_offline_login(email):
+    with data_lock:
+        store = load_store()
+        if store["offline_logins"].pop(email, None):
+            save_store(store)
+
+
+def find_offline_login_user(email, password):
+    """Return the saved person if this password matches a current saved log-in, otherwise None."""
+    with data_lock:
+        entry = load_store()["offline_logins"].get(email)
+    if entry is None or not is_offline_login_current(entry):
+        return None
+    return entry["user"] if check_password_hash(entry["password_hash"], password) else None
+
+
 def verify_login(email, password):
+    """Check a log-in with Supabase, or with this device's saved copy if Supabase can't be reached."""
     if supabase is None:
         raise AccountError(SERVICE_UNAVAILABLE)
     # Signing in changes a client's credentials, so this must not use the shared client.
@@ -734,27 +790,42 @@ def verify_login(email, password):
         options=ClientOptions(auto_refresh_token=False, persist_session=False),
     )
     try:
-        return client.auth.sign_in_with_password(
+        account = client.auth.sign_in_with_password(
             {"email": email, "password": password}
         ).user
     except AUTH_ERRORS as error:
         code = getattr(error, "code", None)
         app.logger.warning("Log-in failed: %s %s", type(error).__name__, code)
+        # Only a lost connection falls back. If Supabase answers no, the answer stays no.
+        if isinstance(error, (httpx.HTTPError, AuthRetryableError)):
+            user = find_offline_login_user(email, password)
+            if user is None:
+                raise AccountError(OFFLINE_LOGIN_FAILED) from error
+            return user
         if code == "invalid_credentials":
+            # Supabase refused the password saved here, so it was changed somewhere else.
+            if find_offline_login_user(email, password):
+                forget_offline_login(email)
             raise AccountError("Incorrect email or password.") from error
+        if code == "user_banned":
+            forget_offline_login(email)
         raise AccountError(SERVICE_UNAVAILABLE) from error
+
+    metadata = account.user_metadata or {}
+    user = {
+        "id": account.id,
+        "name": metadata.get("name") or account.email,
+        "email": account.email,
+        "is_admin": is_admin_account(account),
+    }
+    save_offline_login(email, password, user)
+    return user
 
 
 def start_session(user):
-    metadata = user.user_metadata or {}
     session.clear()
     session.permanent = True
-    session["user"] = {
-        "id": user.id,
-        "name": metadata.get("name") or user.email,
-        "email": user.email,
-        "is_admin": is_admin_account(user),
-    }
+    session["user"] = user
 
 
 def find_password_problem(password):
@@ -963,6 +1034,7 @@ def set_account_password(user_id):
     if is_admin_account(account):
         return jsonify(error="Admin passwords can't be changed here."), 403
     update_account(user_id, {"password": password})
+    forget_offline_login((account.email or "").lower())
     return jsonify(changed=True)
 
 
