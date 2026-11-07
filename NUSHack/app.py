@@ -40,6 +40,9 @@ PUBLIC_ENDPOINTS = {"login", "static"}
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 72
 MAX_MESSAGE_LENGTH = 500
+MESSAGE_EDIT_WINDOW = timedelta(minutes=5)
+# Also listed in script.js, which offers these in the message menu.
+MESSAGE_REACTIONS = ("👍", "❤️", "😂", "😮", "😢", "🙏")
 MAX_NOTICE_LENGTH = 1000
 NOTICE_TAGS = ("announcement", "reminder", "general")
 DEFAULT_NOTICE_TAG = "general"
@@ -621,6 +624,56 @@ def save_removal(records, kind, record_id, user):
         )
 
 
+def find_open_message(message_id, user):
+    """Return a message the user sent or received, unless it has been deleted."""
+    with data_lock:
+        records = load_records()
+    message = find_record(records, message_id, "message")
+    if (
+        message is None
+        or message_id in find_removed_records(records, "message")
+        or user["id"] not in (message["data"].get("sender_id"), message["data"].get("recipient_id"))
+    ):
+        return None
+    return message
+
+
+def apply_message_updates(records, messages):
+    """Return copies of the messages showing their latest edit and everyone's reactions."""
+    updated = {
+        message["id"]: {**message, "data": {**message["data"], "reactions": {}}}
+        for message in messages
+    }
+    updates = [
+        record
+        for record in records
+        if record["data"].get("type") in ("message_edit", "message_reaction")
+    ]
+    # Oldest first so the latest wins. Records pulled from Supabase can be in any order.
+    for update in sorted(updates, key=lambda record: datetime.fromisoformat(record["created_at"])):
+        data = update["data"]
+        message = updated.get(data.get("message_id"))
+        if message is None:
+            continue
+        shown = message["data"]
+        author = data.get("sender_id")
+        if data["type"] == "message_edit" and author == shown.get("sender_id"):
+            shown["text"] = data.get("text")
+            shown["edited"] = True
+        elif data["type"] == "message_reaction" and author in (
+            shown.get("sender_id"),
+            shown.get("recipient_id"),
+        ):
+            if data.get("emoji"):
+                shown["reactions"][author] = data["emoji"]
+            else:
+                shown["reactions"].pop(author, None)
+        else:
+            continue
+        message["synced"] = message["synced"] and update["synced"]
+    return list(updated.values())
+
+
 def is_number_between(value, lowest, highest):
     # Exactly int or float, because Python also counts True and False as ints.
     return type(value) in (int, float) and lowest <= value <= highest
@@ -1088,9 +1141,12 @@ def get_records():
     taken_down = find_removed_records(records, "notice")
     deleted_messages = find_removed_records(records, "message")
     resolved_sos = find_resolved_sos(records)
-    return jsonify(
-        [r for r in records if is_visible(r, user_id, taken_down, deleted_messages, resolved_sos)]
-    )
+    visible = [
+        r for r in records if is_visible(r, user_id, taken_down, deleted_messages, resolved_sos)
+    ]
+    messages = [r for r in visible if r["data"].get("type") == "message"]
+    others = [r for r in visible if r["data"].get("type") != "message"]
+    return jsonify(others + apply_message_updates(records, messages))
 
 
 @app.route("/api/users")
@@ -1326,6 +1382,66 @@ def delete_message(message_id):
 
     save_removal(records, "message", message_id, user)
     return jsonify(removed=True)
+
+
+@app.route("/api/messages/<message_id>", methods=["PATCH"])
+def edit_message(message_id):
+    user = session["user"]
+    data = request.get_json(silent=True)
+    text = clean_text(data.get("text")) if isinstance(data, dict) else ""
+    if not text or len(text) > MAX_MESSAGE_LENGTH:
+        return jsonify(error=f"Messages must be 1 to {MAX_MESSAGE_LENGTH} characters."), 400
+
+    message = find_open_message(message_id, user)
+    if message is None:
+        return jsonify(error="Message not found."), 404
+    if message["data"].get("sender_id") != user["id"]:
+        return jsonify(error="Only the sender can edit a message."), 403
+    sent_at = datetime.fromisoformat(message["created_at"])
+    if datetime.now(timezone.utc) - sent_at > MESSAGE_EDIT_WINDOW:
+        return jsonify(error="Messages can only be edited for 5 minutes after sending."), 403
+
+    # A new record, like a removal. recipient_id keeps the text off other people's devices,
+    # because pull_remote_records only downloads records addressed to that person.
+    save_new_record(
+        {
+            "type": "message_edit",
+            "message_id": message_id,
+            "text": text,
+            "recipient_id": message["data"].get("recipient_id"),
+        },
+        user,
+    )
+    return jsonify(edited=True)
+
+
+@app.route("/api/messages/<message_id>/reaction", methods=["PUT"])
+def react_to_message(message_id):
+    user = session["user"]
+    data = request.get_json(silent=True)
+    emoji = data.get("emoji") if isinstance(data, dict) else None
+    # None takes the person's reaction away.
+    if emoji is not None and emoji not in MESSAGE_REACTIONS:
+        return jsonify(error="Choose a valid reaction."), 400
+
+    message = find_open_message(message_id, user)
+    if message is None:
+        return jsonify(error="Message not found."), 404
+
+    sender_id = message["data"].get("sender_id")
+    save_new_record(
+        {
+            "type": "message_reaction",
+            "message_id": message_id,
+            "emoji": emoji,
+            # The other person, so the reaction reaches both of them and nobody else.
+            "recipient_id": message["data"].get("recipient_id")
+            if user["id"] == sender_id
+            else sender_id,
+        },
+        user,
+    )
+    return jsonify(emoji=emoji)
 
 
 @app.route("/api/sync", methods=["POST"])

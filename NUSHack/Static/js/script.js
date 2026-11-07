@@ -24,6 +24,11 @@ const NOTIFICATION_DISMISSED_KEY = "bits-notification-prompt-dismissed";
 const MAX_ACTIVITY_ITEMS = 20;
 const MAX_REMEMBERED_READ_MESSAGES = 2000;
 const ACTIVITY_PREVIEW_LENGTH = 80;
+const MESSAGE_EDIT_WINDOW_MS = 5 * 60 * 1000;
+// Also listed in app.py, which only accepts these.
+const MESSAGE_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+const MESSAGE_MENU_EDGE_MARGIN_PX = 8;
+const LONG_PRESS_MS = 500;
 // "Are you OK?" appears after this long without activity, then again after the same gap.
 const SAFETY_CHECK_MS = 5 * 60 * 1000;
 const SAFETY_MISSED_CHECKS_FOR_SOS = 2;
@@ -201,6 +206,27 @@ const currentUserName = document.body.dataset.userName;
 const notificationsSupported = "Notification" in window && window.isSecureContext;
 const renderedLists = {};
 
+// Built here, not in index.html, because a server started before an update still sends the older page.
+const messageMenu = document.createElement("div");
+messageMenu.className = "message-menu";
+messageMenu.setAttribute("role", "group");
+messageMenu.setAttribute("aria-label", "Message options");
+messageMenu.tabIndex = -1;
+messageMenu.hidden = true;
+document.body.append(messageMenu);
+let messageMenuOpener = null;
+
+const messageEditing = document.createElement("p");
+messageEditing.className = "message-editing";
+messageEditing.hidden = true;
+const messageEditCancel = document.createElement("button");
+messageEditCancel.type = "button";
+messageEditCancel.textContent = "Cancel";
+messageEditing.append("Editing message", messageEditCancel);
+messageForm.prepend(messageEditing);
+let editingMessage = null;
+let draftBeforeEditing = "";
+
 async function requestJson(path, options) {
   const response = await fetch(path, options);
   if (response.status === 401) {
@@ -339,7 +365,8 @@ function createMessageBubble(record) {
 
   const meta = document.createElement("p");
   meta.className = "message-meta";
-  const time = new Date(record.created_at).toLocaleTimeString([], { timeStyle: "short" });
+  const sentAt = new Date(record.created_at).toLocaleTimeString([], { timeStyle: "short" });
+  const time = record.data.edited ? `${sentAt} · Edited` : sentAt;
   if (!record.synced) {
     meta.textContent = `${time} · Pending upload`;
   } else if (isSent) {
@@ -355,15 +382,185 @@ function createMessageBubble(record) {
   }
 
   bubble.append(text, meta);
-  if (isSent || currentUserIsAdmin) {
-    const button = document.createElement("button");
-    button.className = "message-delete";
-    button.type = "button";
-    button.textContent = "Delete";
-    button.addEventListener("click", () => deleteMessage(record.id));
-    bubble.append(button);
+  const reactions = Object.values(record.data.reactions ?? {});
+  if (reactions.length > 0) {
+    const reactionList = document.createElement("p");
+    reactionList.className = "message-reactions";
+    reactionList.textContent = reactions.join(" ");
+    bubble.append(reactionList);
   }
+  addMessageMenuTriggers(bubble, record);
   return bubble;
+}
+
+function addMessageMenuTriggers(bubble, record) {
+  // Focusable, so the keyboard's menu key or Shift+F10 can open the menu too.
+  bubble.tabIndex = 0;
+  bubble.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    // A keyboard can report no position, so the menu then opens under the message.
+    const box = bubble.getBoundingClientRect();
+    openMessageMenu(record, bubble, event.clientX || box.left, event.clientY || box.bottom);
+  });
+
+  // iPhones have no right-click and don't fire contextmenu, so holding a finger down opens it.
+  let pressTimer;
+  bubble.addEventListener(
+    "touchstart",
+    (event) => {
+      const { clientX, clientY } = event.touches[0];
+      pressTimer = setTimeout(() => openMessageMenu(record, bubble, clientX, clientY), LONG_PRESS_MS);
+    },
+    { passive: true }
+  );
+  for (const eventName of ["touchend", "touchmove", "touchcancel"]) {
+    bubble.addEventListener(eventName, () => clearTimeout(pressTimer), { passive: true });
+  }
+}
+
+function createMessageMenuButton(label, action) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", () => {
+    closeMessageMenu();
+    action();
+  });
+  return button;
+}
+
+function openMessageMenu(record, bubble, x, y) {
+  const isSent = record.data.sender_id === currentUserId;
+  const myReaction = record.data.reactions?.[currentUserId];
+
+  const reactionButtons = document.createElement("div");
+  reactionButtons.className = "message-menu-reactions";
+  for (const emoji of MESSAGE_REACTIONS) {
+    // Choosing your current reaction again takes it away.
+    const button = createMessageMenuButton(emoji, () =>
+      reactToMessage(record.id, emoji === myReaction ? null : emoji)
+    );
+    button.setAttribute("aria-label", `React with ${emoji}`);
+    button.setAttribute("aria-pressed", String(emoji === myReaction));
+    reactionButtons.append(button);
+  }
+  const items = [reactionButtons];
+
+  if (isSent) {
+    const canEdit = Date.now() - new Date(record.created_at) <= MESSAGE_EDIT_WINDOW_MS;
+    const editButton = createMessageMenuButton(canEdit ? "Edit" : "Edit (only within 5 min)", () =>
+      startEditingMessage(record)
+    );
+    editButton.disabled = !canEdit;
+    items.push(editButton);
+  }
+  if (isSent || currentUserIsAdmin) {
+    const deleteButton = createMessageMenuButton("Delete", () => deleteMessage(record.id));
+    deleteButton.className = "message-menu-delete";
+    items.push(deleteButton);
+  }
+
+  messageMenu.replaceChildren(...items);
+  messageMenu.hidden = false;
+  messageMenuOpener = bubble;
+
+  // Keep the whole menu on screen when opened near an edge.
+  const { width, height } = messageMenu.getBoundingClientRect();
+  const furthestLeft = window.innerWidth - width - MESSAGE_MENU_EDGE_MARGIN_PX;
+  const furthestTop = window.innerHeight - height - MESSAGE_MENU_EDGE_MARGIN_PX;
+  messageMenu.style.left = `${Math.max(MESSAGE_MENU_EDGE_MARGIN_PX, Math.min(x, furthestLeft))}px`;
+  messageMenu.style.top = `${Math.max(MESSAGE_MENU_EDGE_MARGIN_PX, Math.min(y, furthestTop))}px`;
+  messageMenu.focus();
+}
+
+function closeMessageMenu() {
+  if (messageMenu.hidden) {
+    return;
+  }
+  const hadFocus = messageMenu.contains(document.activeElement);
+  messageMenu.hidden = true;
+  if (hadFocus && messageMenuOpener?.isConnected) {
+    messageMenuOpener.focus({ preventScroll: true });
+  }
+}
+
+messageMenu.addEventListener("contextmenu", (event) => event.preventDefault());
+messageMenu.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeMessageMenu();
+  }
+});
+messageMenu.addEventListener("focusout", (event) => {
+  if (event.relatedTarget && !messageMenu.contains(event.relatedTarget)) {
+    closeMessageMenu();
+  }
+});
+document.addEventListener("pointerdown", (event) => {
+  if (!messageMenu.contains(event.target)) {
+    closeMessageMenu();
+  }
+});
+// Not "scroll", which also fires when a new message moves the chat. Dragging a scrollbar or
+// swiping starts with a pointerdown, so those already close the menu.
+document.addEventListener("wheel", closeMessageMenu, { passive: true });
+window.addEventListener("resize", closeMessageMenu);
+
+function startEditingMessage(record) {
+  if (!editingMessage) {
+    draftBeforeEditing = messageInput.value;
+  }
+  editingMessage = record;
+  messageInput.value = record.data.text;
+  messageSend.textContent = "Save";
+  messageEditing.hidden = false;
+  messageError.textContent = "";
+  messageInput.focus();
+}
+
+function stopEditingMessage() {
+  if (!editingMessage) {
+    return;
+  }
+  editingMessage = null;
+  messageInput.value = draftBeforeEditing;
+  messageSend.textContent = "Send";
+  messageEditing.hidden = true;
+}
+
+messageEditCancel.addEventListener("click", () => {
+  stopEditingMessage();
+  messageError.textContent = "";
+  messageInput.focus();
+});
+messageInput.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && editingMessage) {
+    stopEditingMessage();
+    messageError.textContent = "";
+  }
+});
+
+async function saveMessageEdit(messageId, text) {
+  await requestJson(`/api/messages/${encodeURIComponent(messageId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  await Promise.all([refreshRecords(), refreshStatus()]);
+}
+
+async function reactToMessage(messageId, emoji) {
+  messageError.textContent = "";
+  try {
+    await requestJson(`/api/messages/${encodeURIComponent(messageId)}/reaction`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ emoji }),
+    });
+    await Promise.all([refreshRecords(), refreshStatus()]);
+  } catch (error) {
+    console.warn(error);
+    messageError.textContent = "Couldn't save your reaction. Please try again.";
+  }
 }
 
 async function deleteMessage(messageId) {
@@ -373,6 +570,9 @@ async function deleteMessage(messageId) {
   messageError.textContent = "";
   try {
     await requestJson(`/api/messages/${encodeURIComponent(messageId)}`, { method: "DELETE" });
+    if (editingMessage?.id === messageId) {
+      stopEditingMessage();
+    }
     await Promise.all([refreshRecords(), refreshStatus()]);
   } catch (error) {
     console.warn(error);
@@ -390,7 +590,13 @@ function renderMessages() {
   const snapshot = JSON.stringify([
     new Date().toDateString(),
     personId,
-    messages.map((record) => [record.id, record.synced]),
+    messages.map((record) => [
+      record.id,
+      record.synced,
+      record.data.text,
+      record.data.edited,
+      record.data.reactions,
+    ]),
   ]);
   if (snapshot === renderedMessages) {
     return;
@@ -1230,6 +1436,9 @@ async function refreshRecords() {
 }
 
 function updateConversation() {
+  if (editingMessage && editingMessage.data.recipient_id !== recipientSelect.value) {
+    stopEditingMessage();
+  }
   const hasPerson = Boolean(recipientSelect.value);
   messageInput.disabled = !hasPerson;
   messageSend.disabled = !hasPerson;
@@ -1339,7 +1548,7 @@ function updateActivity() {
   const isUnread = (record) =>
     record.data.recipient_id === currentUserId && !readMessageIds.has(record.id);
   // Rebuilding only on a real change keeps the list's scroll position and focus.
-  const snapshot = JSON.stringify(recent.map((r) => [r.id, r.synced, isUnread(r)]));
+  const snapshot = JSON.stringify(recent.map((r) => [r.id, r.synced, r.data.text, isUnread(r)]));
   if (snapshot !== renderedActivity) {
     renderedActivity = snapshot;
     activityList.replaceChildren(...recent.map((r) => createActivityItem(r, isUnread(r))));
@@ -1698,6 +1907,17 @@ messageForm.addEventListener("submit", async (event) => {
     return;
   }
   messageError.textContent = "";
+  if (editingMessage) {
+    try {
+      await saveMessageEdit(editingMessage.id, text);
+      stopEditingMessage();
+      messageInput.focus();
+    } catch (error) {
+      console.warn(error);
+      messageError.textContent = error.userMessage ?? "Couldn't save your edit. Please try again.";
+    }
+    return;
+  }
   try {
     await saveRecord({ type: "message", text, recipient_id: recipientSelect.value });
     messageForm.reset();
