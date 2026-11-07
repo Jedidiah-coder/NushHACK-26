@@ -2,44 +2,21 @@
 This is the repository for our NushHACK 2026 submission.
 # Dependencies
 - Flask
-- Supabase
-- dotenv
-You can install them by typing
+- click
+- httpx
+- python-dotenv
+- postgrest
+- supabase
+  
+You can install them by typing the following command in Command Prompt / PowerShell:
+```bash
+pip install [dependency]
 ```
-pip instal [dependency]
-```
-in command prompt/powershell
 
-# Installed Libraries:
-```
-import json
-import os
-import re
-import threading
-import time
-import uuid
-from collections import Counter
-from datetime import datetime, timedelta, timezone
-from functools import wraps
-from pathlib import Path
-from xml.sax.saxutils import escape
+To install all dependencies at once:
 
-import click
-import httpx
-from dotenv import load_dotenv
-from flask import (
-    Flask,
-    jsonify,
-    make_response,
-    redirect,
-    render_template,
-    request,
-    session,
-    url_for,
-)
-from postgrest.exceptions import APIError
-from supabase import AuthError, AuthRetryableError, ClientOptions, create_client
-from werkzeug.security import check_password_hash, generate_password_hash
+```bash
+pip install Flask click httpx python-dotenv postgrest supabase
 ```
 # Accounts
 People can't sign up themselves. Admins grant accounts and other admins from the Accounts tab, where they can also see every account's rank, see members' login emails and set new passwords for members.
