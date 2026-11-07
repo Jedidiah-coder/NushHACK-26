@@ -85,8 +85,10 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
 TWILIO_API_KEY_SID = os.getenv("TWILIO_API_KEY_SID", "").strip()
 TWILIO_API_KEY_SECRET = os.getenv("TWILIO_API_KEY_SECRET", "").strip()
 TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "").strip()
-# The internet may come back during an emergency, so a failed text is tried again.
-SOS_TEXT_RETRY_SECONDS = (10, 30, 60, 120, 300)
+# The internet may come back during an emergency, so a failed text waits in data.json and is tried again.
+SOS_TEXT_RETRY_SECONDS = 20
+SOS_TEXT_MAX_AGE = timedelta(hours=24)
+SOS_TEXT_LATE_AFTER = timedelta(minutes=5)
 
 SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
 if not SECRET_KEY:
@@ -124,17 +126,21 @@ supabase = (
 
 # Flask handles requests on several threads, so JSON file access takes turns.
 data_lock = threading.Lock()
+sos_text_worker_lock = threading.Lock()
+sos_text_worker_running = False
 
 
 def load_store():
     if not DATA_FILE.exists():
-        return {"last_logouts": {}, "users": {}, "offline_logins": {}, "records": []}
-    stored = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+        stored = []
+    else:
+        stored = json.loads(DATA_FILE.read_text(encoding="utf-8"))
     # Files from before logouts were tracked hold just a list of records.
     if isinstance(stored, list):
-        return {"last_logouts": {}, "users": {}, "offline_logins": {}, "records": stored}
+        stored = {"last_logouts": {}, "records": stored}
     stored.setdefault("users", {})
     stored.setdefault("offline_logins", {})
+    stored.setdefault("pending_sos_texts", [])
     return stored
 
 
@@ -352,7 +358,7 @@ def is_valid_map_room_shape(room):
 
 
 def prepare_based_on(data):
-    """Check which versions a map change was made from. Returns extra record data, or None if invalid.
+    """Check which versions a change was made from. Returns extra record data, or None if invalid.
 
     The browser compares these to spot people changing the same thing without seeing each other's
     change, which device clocks can't show reliably.
@@ -373,7 +379,7 @@ def prepare_map_layout(data):
     """Check a redesigned map. Returns (record data, error message)."""
     based_on = prepare_based_on(data)
     if based_on is None:
-        return None, "This map change isn't valid."
+        return None, "This change isn't valid."
     levels = data.get("levels")
     if not isinstance(levels, list) or not 1 <= len(levels) <= MAX_MAP_LEVELS:
         return None, f"Maps need 1 to {MAX_MAP_LEVELS} levels."
@@ -426,7 +432,7 @@ def prepare_record(data, user):
             return None, "Choose a valid status."
         based_on = prepare_based_on(data)
         if based_on is None:
-            return None, "This map change isn't valid."
+            return None, "This change isn't valid."
         return {"type": "map_status", "room_id": room_id, "status": status, **based_on}, None
 
     if kind == "checklist_template":
@@ -439,7 +445,10 @@ def prepare_record(data, user):
             return None, f"Checklists need 1 to {MAX_CHECKLIST_TASKS} tasks."
         if not all(tasks) or any(len(task) > MAX_CHECKLIST_TASK_LENGTH for task in tasks):
             return None, f"Tasks must be 1 to {MAX_CHECKLIST_TASK_LENGTH} characters."
-        return {"type": "checklist_template", "name": name, "items": tasks}, None
+        based_on = prepare_based_on(data)
+        if based_on is None:
+            return None, "This change isn't valid."
+        return {"type": "checklist_template", "name": name, "items": tasks, **based_on}, None
 
     if kind == "sos_phone":
         if not user.get("is_admin"):
@@ -448,7 +457,10 @@ def prepare_record(data, user):
         # Blank removes the number.
         if phone and not re.fullmatch(SOS_PHONE_PATTERN, phone):
             return None, "Enter a valid phone number, such as +65 12345678."
-        return {"type": "sos_phone", "phone": phone}, None
+        based_on = prepare_based_on(data)
+        if based_on is None:
+            return None, "This change isn't valid."
+        return {"type": "sos_phone", "phone": phone, **based_on}, None
 
     if kind == "sos":
         if data.get("automatic") is True:
@@ -578,11 +590,27 @@ def find_resolved_sos(records):
     }
 
 
+def find_latest_versions(records):
+    """Return the versions nobody has built on yet, oldest first. Matches findLatestVersions in script.js."""
+    records = sorted(records, key=lambda record: record["created_at"])
+    replaced = set()
+    for index, record in enumerate(records):
+        # Records from before based_on existed are taken to follow the one before them.
+        parents = record["data"].get("based_on")
+        if parents is None:
+            parents = [records[index - 1]["id"]] if index > 0 else []
+        replaced.update(parents)
+    return [record for record in records if record["id"] not in replaced]
+
+
 def find_sos_phone(records):
     numbers = [record for record in records if record["data"].get("type") == "sos_phone"]
     if not numbers:
         return SOS_PHONE_NUMBER
-    return max(numbers, key=lambda record: record["created_at"])["data"].get("phone", "")
+    latest = find_latest_versions(numbers)
+    # If a number clashed with someone removing it, keeping a number is the safer mistake.
+    with_number = [record for record in latest if record["data"].get("phone")]
+    return (with_number or latest)[-1]["data"].get("phone", "")
 
 
 def is_twilio_ready():
@@ -620,46 +648,99 @@ def find_own_sos_location(records, user_id):
     return max(locations, key=lambda record: record["created_at"])["data"]
 
 
-def send_sos_text(sos_id, body):
-    """Text the SOS number through Twilio. Runs on its own thread, as retries can take minutes."""
-    if not is_twilio_ready():
-        app.logger.warning("SOS text not sent: add the TWILIO settings to NUSHack/.env.")
-        return
+def try_sos_text(text, records):
+    """Try one waiting text. Returns True once it's finished with, or False to try again later."""
+    # A retry shouldn't raise the alarm for an SOS that's already over.
+    if text["sos_id"] in find_resolved_sos(records):
+        return True
 
-    for wait in (0, *SOS_TEXT_RETRY_SECONDS):
-        time.sleep(wait)
-        with data_lock:
-            records = load_records()
-        # A retry shouldn't raise the alarm for an SOS that's already over.
-        if sos_id in find_resolved_sos(records):
-            return
+    raised_at = datetime.fromisoformat(text["created_at"])
+    waited = datetime.now(timezone.utc) - raised_at
+    if waited > SOS_TEXT_MAX_AGE:
+        app.logger.error("SOS text not sent: still no connection after %s.", SOS_TEXT_MAX_AGE)
+        return True
 
-        phone = re.sub(r"[ ()-]", "", find_sos_phone(records))
-        if not phone.startswith("+"):
-            app.logger.warning(
-                "SOS text not sent: the SOS number is blank or needs a country code, such as +65."
-            )
-            return
+    phone = re.sub(r"[ ()-]", "", find_sos_phone(records))
+    if not phone.startswith("+"):
+        app.logger.warning(
+            "SOS text not sent: the SOS number is blank or needs a country code, such as +65."
+        )
+        return True
 
-        try:
-            response = post_to_twilio("Messages", phone, {"Body": body})
-        except httpx.HTTPError as error:
-            app.logger.warning("SOS text failed, trying again: %s", error)
-            continue
+    body = text["body"]
+    if waited > SOS_TEXT_LATE_AFTER:
+        body += f" Sent late: raised at {raised_at.astimezone():%d %b %H:%M}."
+    try:
+        response = post_to_twilio("Messages", phone, {"Body": body})
+    except httpx.HTTPError:
+        return False
+    # Twilio says the request itself is wrong, such as bad keys, so retrying can't help.
+    if not response.is_success and response.status_code < 500 and response.status_code != 429:
+        app.logger.error("SOS text rejected by Twilio: %s %s", response.status_code, response.text)
+        return True
+    return response.is_success
 
-        if response.is_success:
-            return
-        # Twilio says the request itself is wrong, such as bad keys, so retrying can't help.
-        if response.status_code < 500 and response.status_code != 429:
-            app.logger.error("SOS text rejected by Twilio: %s %s", response.status_code, response.text)
-            return
-        app.logger.warning("SOS text failed, trying again: Twilio returned %s", response.status_code)
 
-    app.logger.error("SOS text not sent: gave up after %s tries.", len(SOS_TEXT_RETRY_SECONDS) + 1)
+def run_sos_text_worker():
+    global sos_text_worker_running
+    warned = False
+    try:
+        while True:
+            try:
+                with data_lock:
+                    store = load_store()
+                finished = {
+                    text["id"]
+                    for text in store["pending_sos_texts"]
+                    if try_sos_text(text, store["records"])
+                }
+                # Checked while holding the worker lock, so a text added right now can't be missed.
+                with sos_text_worker_lock, data_lock:
+                    store = load_store()
+                    remaining = [
+                        text for text in store["pending_sos_texts"] if text["id"] not in finished
+                    ]
+                    if finished:
+                        store["pending_sos_texts"] = remaining
+                        save_store(store)
+                    if not remaining:
+                        sos_text_worker_running = False
+                        return
+            except OSError as error:
+                # Windows can lock a file for a moment, such as during a virus scan.
+                app.logger.warning("Couldn't read or save waiting SOS texts: %s", error)
+            if not warned:
+                app.logger.warning("SOS text not sent yet. Trying again for up to %s.", SOS_TEXT_MAX_AGE)
+                warned = True
+            time.sleep(SOS_TEXT_RETRY_SECONDS)
+    finally:
+        sos_text_worker_running = False
+
+
+def start_sos_text_worker():
+    global sos_text_worker_running
+    with sos_text_worker_lock:
+        if not sos_text_worker_running:
+            sos_text_worker_running = True
+            threading.Thread(target=run_sos_text_worker, daemon=True).start()
 
 
 def start_sos_text(sos_id, body):
-    threading.Thread(target=send_sos_text, args=(sos_id, body), daemon=True).start()
+    if not is_twilio_ready():
+        app.logger.warning("SOS text not sent: add the TWILIO settings to NUSHack/.env.")
+        return
+    with data_lock:
+        store = load_store()
+        store["pending_sos_texts"].append(
+            {
+                "id": str(uuid.uuid4()),
+                "sos_id": sos_id,
+                "body": body,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        save_store(store)
+    start_sos_text_worker()
 
 
 def is_visible(record, user_id, taken_down, deleted_messages, resolved_sos):
@@ -1212,5 +1293,7 @@ def create_admin():
 
 
 if __name__ == "__main__":
+    # Texts still waiting from before a restart carry on.
+    start_sos_text_worker()
     # Debug mode can expose secrets, so it's off unless FLASK_DEBUG=1 is set locally.
     app.run(port=8050)

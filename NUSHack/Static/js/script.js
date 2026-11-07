@@ -157,6 +157,9 @@ let renderedMessages = "";
 let renderedUsers = "";
 let currentChecklist = DEFAULT_CHECKLIST;
 let renderedChecklist = "";
+let checklistHeads = [];
+let checklistDraftBase = [];
+let sosPhoneHeads = [];
 let seenRecordIds = null;
 let messagesLoaded = false;
 let readMessageIds = null;
@@ -1044,17 +1047,20 @@ async function refreshRecords() {
   allMessages = records.filter((r) => r.data.type === "message");
   const notices = records.filter((r) => r.data.type === "notice").reverse();
   const inspections = records.filter((r) => r.data.type === "checklist").reverse();
-  const checklistVersions = records.filter((r) => r.data.type === "checklist_template");
+  checklistHeads = findLatestVersions(records.filter((r) => r.data.type === "checklist_template"));
 
-  // Records are sorted oldest first, so the last version is the current one.
-  showChecklist(checklistVersions.at(-1)?.data ?? DEFAULT_CHECKLIST);
+  showChecklist(checklistHeads.at(-1)?.data ?? DEFAULT_CHECKLIST);
+  renderChecklistClash();
   updateMap(records);
-  const latestSosPhone = records.filter((r) => r.data.type === "sos_phone").at(-1);
-  const currentSosPhone = latestSosPhone ? latestSosPhone.data.phone : defaultSosPhone;
+  sosPhoneHeads = findLatestVersions(records.filter((r) => r.data.type === "sos_phone"));
+  // If a number clashed with someone removing it, keeping a number is the safer mistake.
+  const shownSosPhone = sosPhoneHeads.findLast((r) => r.data.phone) ?? sosPhoneHeads.at(-1);
+  const currentSosPhone = shownSosPhone ? shownSosPhone.data.phone : defaultSosPhone;
   if (currentSosPhone !== sosPhone) {
     sosPhone = currentSosPhone;
     setUpSosContacts();
   }
+  renderSosPhoneClash(shownSosPhone);
   renderMessages();
   messagesLoaded = true;
   updateActivity();
@@ -1354,7 +1360,57 @@ function addEditorTask(value = "") {
   return input;
 }
 
+async function saveChecklistVersion({ name, items }, basedOn) {
+  await saveRecord({ type: "checklist_template", name, items, based_on: basedOn });
+}
+
+function renderChecklistClash() {
+  renderVersionClash({
+    id: "checklist-clash",
+    heads: checklistHeads,
+    read: ({ data }) => ({ name: data.name, items: data.items }),
+    title: "Checklist edits clashed.",
+    noun: "version",
+    keepLabel: "Keep this checklist",
+    hidden: !checklistEditor.hidden,
+    save: async (version) => {
+      checklistError.textContent = "";
+      try {
+        await saveChecklistVersion(version, listIds(checklistHeads));
+      } catch (error) {
+        console.warn(error);
+        checklistError.textContent = error.userMessage ?? "Couldn't save the checklist. Please try again.";
+      }
+    },
+  });
+}
+
+function renderSosPhoneClash(shown) {
+  const describeNumber = ({ data }) => data.phone || "no number";
+  renderVersionClash({
+    id: "settings-sos-clash",
+    heads: sosPhoneHeads,
+    shown,
+    read: ({ data }) => data.phone,
+    title: "SOS number changes clashed.",
+    noun: "choice",
+    describeDetail: describeNumber,
+    keepLabel: "Keep this number",
+    save: async (phone) => {
+      const sosError = document.getElementById("settings-sos-error");
+      sosError.textContent = "";
+      try {
+        await saveRecord({ type: "sos_phone", phone, based_on: listIds(sosPhoneHeads) });
+      } catch (error) {
+        console.warn(error);
+        sosError.textContent = error.userMessage ?? "Couldn't save the number. Please try again.";
+      }
+    },
+  });
+}
+
 function openChecklistEditor() {
+  checklistDraftBase = listIds(checklistHeads);
   editorName.value = currentChecklist.name;
   editorTaskList.replaceChildren();
   currentChecklist.items.forEach((item) => addEditorTask(item));
@@ -1362,6 +1418,7 @@ function openChecklistEditor() {
   checklistForm.hidden = true;
   checklistEditButton.hidden = true;
   checklistEditor.hidden = false;
+  renderChecklistClash();
   editorName.focus();
 }
 
@@ -1369,6 +1426,7 @@ function closeChecklistEditor() {
   checklistEditor.hidden = true;
   checklistForm.hidden = false;
   checklistEditButton.hidden = false;
+  renderChecklistClash();
   checklistEditButton.focus();
 }
 
@@ -1670,7 +1728,7 @@ document.getElementById("settings-sos-form")?.addEventListener("submit", async (
   sosError.textContent = "";
   sosResult.textContent = "";
   try {
-    await saveRecord({ type: "sos_phone", phone });
+    await saveRecord({ type: "sos_phone", phone, based_on: listIds(sosPhoneHeads) });
     phoneInput.value = phone;
     sosResult.textContent = phone
       ? `Saved. Other devices will show ${phone} once this one has synced.`
@@ -1845,7 +1903,8 @@ checklistEditor.addEventListener("submit", async (event) => {
 
   editorError.textContent = "";
   try {
-    await saveRecord({ type: "checklist_template", name, items });
+    // Based on what the editor opened with, so an edit made by someone else meanwhile still shows as a clash.
+    await saveChecklistVersion({ name, items }, checklistDraftBase);
     closeChecklistEditor();
   } catch (error) {
     console.warn(error);
@@ -2152,34 +2211,55 @@ async function settleMapLayout(levels) {
   }
 }
 
-function renderMapLayoutClash(editing) {
-  const notice = document.getElementById("map-layout-clash");
+// Shows a choice when people changed the same thing without seeing each other's change.
+function renderVersionClash({ id, heads, shown = heads.at(-1), read, title, noun, describeDetail, keepLabel, hidden = false, save }) {
+  const notice = document.getElementById(id);
+  // Only an admin's page has the SOS number's notice.
   if (!notice) {
     return;
   }
-  const shown = mapLayoutHeads.at(-1);
-  const others = mapLayoutHeads.filter(
-    (record) => JSON.stringify(record.data.levels) !== JSON.stringify(shown.data.levels)
-  );
-  notice.hidden = editing || others.length === 0;
+  const others = heads.filter((record) => JSON.stringify(read(record)) !== JSON.stringify(read(shown)));
+  // These run on every refresh, so rebuilding only on a change keeps the buttons usable.
+  const snapshot = JSON.stringify([hidden, listIds(heads), others.length]);
+  if (notice.dataset.snapshot === snapshot) {
+    return;
+  }
+  notice.dataset.snapshot = snapshot;
+  notice.hidden = hidden || others.length === 0;
   if (notice.hidden) {
     return;
   }
-  const describe = (record) => `${record.data.sender_name}'s version (${formatTime(record.created_at)})`;
-  document.getElementById("map-layout-clash-text").textContent =
-    `Map redesigns clashed. This is ${describe(shown)}. ${others.map(describe).join(" and ")} isn't showing. Choose which one to keep.`;
 
+  const describe = (record) => {
+    const detail = describeDetail ? `: ${describeDetail(record)}` : "";
+    return `${record.data.sender_name}'s ${noun} (${formatTime(record.created_at)})${detail}`;
+  };
+  notice.querySelector("p").textContent =
+    `${title} This is ${describe(shown)}. Not showing: ${others.map(describe).join(" and ")}. Choose which one to keep.`;
   const createButton = (label, record) => {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = label;
-    button.addEventListener("click", () => settleMapLayout(record.data.levels));
+    button.addEventListener("click", () => save(read(record)));
     return button;
   };
-  document.getElementById("map-layout-clash-actions").replaceChildren(
-    createButton("Keep this map", shown),
-    ...others.map((record) => createButton(`Use ${record.data.sender_name}'s version`, record))
+  notice.querySelector("div").replaceChildren(
+    createButton(keepLabel, shown),
+    ...others.map((record) => createButton(`Use ${record.data.sender_name}'s ${noun}`, record))
   );
+}
+
+function renderMapLayoutClash(editing) {
+  renderVersionClash({
+    id: "map-layout-clash",
+    heads: mapLayoutHeads,
+    read: ({ data }) => data.levels,
+    title: "Map redesigns clashed.",
+    noun: "version",
+    keepLabel: "Keep this map",
+    hidden: editing,
+    save: settleMapLayout,
+  });
 }
 
 function setInputValue(input, value) {

@@ -101,6 +101,10 @@
     {% if user.is_admin %}
     <div class="settings-section">
       <h3>Admin Options</h3>
+      <div class="map-clash" id="settings-sos-clash" role="status" hidden>
+        <p></p>
+        <div class="sos-actions"></div>
+      </div>
       <form id="settings-sos-form">
         <label for="settings-sos-phone">SOS phone number</label>
         <input id="settings-sos-phone" type="tel" maxlength="20" placeholder="+65 12345678" autocomplete="off">
@@ -193,6 +197,10 @@
         <h2 id="checklist-title"></h2>
         <button id="checklist-edit" type="button">Edit checklist</button>
       </div>
+      <div class="map-clash" id="checklist-clash" role="status" hidden>
+        <p></p>
+        <div class="sos-actions"></div>
+      </div>
       <form id="checklist-form">
         <div id="checklist-items"></div>
         <p class="form-error" id="checklist-error" role="alert"></p>
@@ -226,7 +234,7 @@
       <ul class="map-legend" id="map-legend" aria-label="Rooms on this level by status"></ul>
       <div class="map-clash" id="map-layout-clash" role="status" hidden>
         <p id="map-layout-clash-text"></p>
-        <div class="sos-actions" id="map-layout-clash-actions"></div>
+        <div class="sos-actions"></div>
       </div>
       <div class="map-scroll">
         <div class="map-floor" id="map-floor"></div>
