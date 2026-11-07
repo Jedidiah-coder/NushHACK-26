@@ -4,6 +4,7 @@ import json
 import os
 import re
 import threading
+import time
 import uuid
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -68,6 +69,14 @@ SOS_PHONE_PATTERN = r"\+?[0-9][0-9 ()-]{2,19}"
 SOS_PHONE_NUMBER = os.getenv("SOS_PHONE_NUMBER", "").strip()
 if not re.fullmatch(SOS_PHONE_PATTERN, SOS_PHONE_NUMBER):
     SOS_PHONE_NUMBER = ""
+
+# Automatic SOS texts stay off until all four of these are in .env.
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+TWILIO_API_KEY_SID = os.getenv("TWILIO_API_KEY_SID", "").strip()
+TWILIO_API_KEY_SECRET = os.getenv("TWILIO_API_KEY_SECRET", "").strip()
+TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "").strip()
+# The internet may come back during an emergency, so a failed text is tried again.
+SOS_TEXT_RETRY_SECONDS = (10, 30, 60, 120, 300)
 
 SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
 if not SECRET_KEY:
@@ -526,6 +535,60 @@ def find_resolved_sos(records):
     }
 
 
+def find_sos_phone(records):
+    numbers = [record for record in records if record["data"].get("type") == "sos_phone"]
+    if not numbers:
+        return SOS_PHONE_NUMBER
+    return max(numbers, key=lambda record: record["created_at"])["data"].get("phone", "")
+
+
+def send_sos_text(sos_id, body):
+    """Text the SOS number through Twilio. Runs on its own thread, as retries can take minutes."""
+    if not all((TWILIO_ACCOUNT_SID, TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET, TWILIO_FROM_NUMBER)):
+        app.logger.warning("SOS text not sent: add the TWILIO settings to NUSHack/.env.")
+        return
+
+    for wait in (0, *SOS_TEXT_RETRY_SECONDS):
+        time.sleep(wait)
+        with data_lock:
+            records = load_records()
+        # A retry shouldn't raise the alarm for an SOS that's already over.
+        if sos_id in find_resolved_sos(records):
+            return
+
+        phone = re.sub(r"[ ()-]", "", find_sos_phone(records))
+        if not phone.startswith("+"):
+            app.logger.warning(
+                "SOS text not sent: the SOS number is blank or needs a country code, such as +65."
+            )
+            return
+
+        try:
+            response = httpx.post(
+                f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json",
+                auth=(TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET),
+                data={"To": phone, "From": TWILIO_FROM_NUMBER, "Body": body},
+                timeout=10,
+            )
+        except httpx.HTTPError as error:
+            app.logger.warning("SOS text failed, trying again: %s", error)
+            continue
+
+        if response.is_success:
+            return
+        # Twilio says the request itself is wrong, such as bad keys, so retrying can't help.
+        if response.status_code < 500 and response.status_code != 429:
+            app.logger.error("SOS text rejected by Twilio: %s %s", response.status_code, response.text)
+            return
+        app.logger.warning("SOS text failed, trying again: Twilio returned %s", response.status_code)
+
+    app.logger.error("SOS text not sent: gave up after %s tries.", len(SOS_TEXT_RETRY_SECONDS) + 1)
+
+
+def start_sos_text(sos_id, body):
+    threading.Thread(target=send_sos_text, args=(sos_id, body), daemon=True).start()
+
+
 def is_visible(record, user_id, taken_down, deleted_messages, resolved_sos):
     data = record["data"]
     kind = data.get("type")
@@ -857,7 +920,15 @@ def create_record():
     prepared, error = prepare_record(data, user)
     if error:
         return jsonify(error=error), 400
-    return jsonify(save_new_record(prepared, user)), 201
+    record = save_new_record(prepared, user)
+    if prepared["type"] == "sos":
+        reason = (
+            "No response to SecuriLock safety checks."
+            if prepared.get("automatic")
+            else "They need help."
+        )
+        start_sos_text(record["id"], f"SOS from {user['name']}. {reason}")
+    return jsonify(record), 201
 
 
 @app.route("/api/reset-data", methods=["POST"])
@@ -895,7 +966,11 @@ def add_sos_location(sos_id):
     if error:
         return jsonify(error=error), 400
     # A new record, not an edit, so this works offline and always reaches Supabase.
-    return jsonify(save_new_record({"type": "sos_location", "sos_id": sos_id, **position}, user)), 201
+    record = save_new_record({"type": "sos_location", "sos_id": sos_id, **position}, user)
+    accuracy = "" if position["accuracy"] is None else f" (within about {position['accuracy']} m)"
+    link = f"https://www.google.com/maps?q={position['latitude']},{position['longitude']}"
+    start_sos_text(sos_id, f"SOS from {user['name']}. Location: {link}{accuracy}")
+    return jsonify(record), 201
 
 
 @app.route("/api/notices/<notice_id>", methods=["DELETE"])

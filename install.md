@@ -6,4 +6,5 @@
 ```
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
-5. Run app.py and you're all set! :)
+5. Optional: to text the SOS number automatically when an SOS is sent, create a Twilio account and fill in the TWILIO settings in NUSHack/.env. Without them, the SOS screen's Call and Send SMS buttons still work.
+6. Run app.py and you're all set! :)
