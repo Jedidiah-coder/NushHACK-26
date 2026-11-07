@@ -552,7 +552,9 @@ function renderSosPanel() {
   if (sosPanelView.name === "failed") {
     showSosPanelContent(
       "SOS NOT sent",
-      "SecuriLock can't be reached and your alert was not saved. Call or text now, then press SOS to try again."
+      canDialFromDevice
+        ? "SecuriLock can't be reached and your alert was not saved. Call or text now, then press SOS to try again."
+        : "SecuriLock can't be reached and your alert was not saved. Use a phone to call or text now, as this computer needs internet to do it. Then press SOS to try again."
     );
     return;
   }
@@ -569,7 +571,11 @@ function renderSosPanel() {
   } else {
     showSosPanelContent(
       "SOS NOT sent yet: no data connection",
-      `${record.data.automatic ? AUTOMATIC_SOS_REASON : ""}Your alert is saved on this device and SecuriLock will keep trying to send it. Call or text now, as these may work without internet.`
+      `${record.data.automatic ? AUTOMATIC_SOS_REASON : ""}Your alert is saved on this device and SecuriLock will keep trying to send it. ${
+        canDialFromDevice
+          ? "Call or text now, as these may work without internet."
+          : "Use a phone to call or text now, as this computer needs internet to do it."
+      }`
     );
   }
 }
