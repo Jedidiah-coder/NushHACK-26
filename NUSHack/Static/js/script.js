@@ -184,6 +184,10 @@ let mapDraftBaseId = null;
 let renderedMap = "";
 const defaultSosPhone = document.body.dataset.sosPhone;
 let sosPhone = defaultSosPhone;
+const sosContactResult = document.getElementById("sos-contact-result");
+// A touch screen is the closest sign of a device with a dialler. Browsers don't say directly.
+const canDialFromDevice = window.matchMedia("(pointer: coarse)").matches;
+let sosContactBusy = false;
 const currentUserName = document.body.dataset.userName;
 const notificationsSupported = "Notification" in window && window.isSecureContext;
 const renderedLists = {};
@@ -435,13 +439,48 @@ function setUpSosContacts() {
       "No emergency number is set up in SecuriLock. Call your control room or emergency services directly.";
     return;
   }
-  contactText.textContent = `Emergency number: ${sosPhone}. Calling and texting need a phone.`;
+  contactText.textContent = canDialFromDevice
+    ? `Emergency number: ${sosPhone}. Call and Send SMS use this phone.`
+    : `Emergency number: ${sosPhone}. Call and Send SMS go through SecuriLock. The call plays a recorded alert, so you can't talk on it.`;
   const dialNumber = sosPhone.replace(/[ ()-]/g, "");
   const position = ownSosLocation?.position;
   const whereAmI = position ? ` My location: ${createMapLink(position)}` : "";
   const smsBody = encodeURIComponent(`SOS from ${currentUserName}. I need help.${whereAmI}`);
   document.getElementById("sos-call").href = `tel:${dialNumber}`;
   document.getElementById("sos-sms").href = `sms:${dialNumber}?body=${smsBody}`;
+}
+
+function setSosContactResult(text) {
+  if (sosContactResult) {
+    sosContactResult.hidden = !text;
+    sosContactResult.textContent = text;
+  }
+}
+
+async function contactSosNumber(event, method) {
+  // Phones keep their own dialler and messaging app, as those can work without internet.
+  if (canDialFromDevice) {
+    return;
+  }
+  event.preventDefault();
+  if (sosContactBusy) {
+    return;
+  }
+  sosContactBusy = true;
+  setSosContactResult(method === "call" ? "Starting the call..." : "Sending the text...");
+  try {
+    await requestJson(`/api/sos/contact/${method}`, { method: "POST" });
+    setSosContactResult(
+      method === "call"
+        ? `Calling ${sosPhone} with a recorded alert. This doesn't confirm anyone answered.`
+        : `Text sent to ${sosPhone}. This doesn't confirm it was delivered.`
+    );
+  } catch (error) {
+    console.warn(error);
+    setSosContactResult(error.userMessage || "Can't reach SecuriLock. Use a phone.");
+  } finally {
+    sosContactBusy = false;
+  }
 }
 
 function createMapLink(position) {
@@ -1663,9 +1702,12 @@ sosButton.addEventListener("click", () => {
   const ownSos = activeSos.find((record) => record.data.sender_id === currentUserId);
   // A second press shows the existing alert instead of sending a duplicate.
   sosPanelView = ownSos ? { name: "result", id: ownSos.id } : { name: "confirm" };
+  setSosContactResult("");
   renderSosPanel();
 });
 sosSend.addEventListener("click", () => sendSos());
+document.getElementById("sos-call").addEventListener("click", (event) => contactSosNumber(event, "call"));
+document.getElementById("sos-sms").addEventListener("click", (event) => contactSosNumber(event, "text"));
 sosLocationUpdate?.addEventListener("click", () => {
   const ownSos = activeSos.find((record) => record.data.sender_id === currentUserId);
   if (ownSos) {

@@ -10,6 +10,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 import click
 import httpx
@@ -542,9 +543,44 @@ def find_sos_phone(records):
     return max(numbers, key=lambda record: record["created_at"])["data"].get("phone", "")
 
 
+def is_twilio_ready():
+    return all((TWILIO_ACCOUNT_SID, TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET, TWILIO_FROM_NUMBER))
+
+
+def post_to_twilio(resource, to_number, fields):
+    return httpx.post(
+        f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/{resource}.json",
+        auth=(TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET),
+        data={"To": to_number, "From": TWILIO_FROM_NUMBER, **fields},
+        timeout=10,
+    )
+
+
+def describe_sos_location(location):
+    accuracy = location.get("accuracy")
+    within = "" if accuracy is None else f" (within about {accuracy} m)"
+    link = f"https://www.google.com/maps?q={location['latitude']},{location['longitude']}"
+    return f"Location: {link}{within}"
+
+
+def find_own_sos_location(records, user_id):
+    """Return this person's newest location from an SOS that's still open."""
+    resolved_sos = find_resolved_sos(records)
+    locations = [
+        record
+        for record in records
+        if record["data"].get("type") == "sos_location"
+        and record["data"].get("sender_id") == user_id
+        and record["data"].get("sos_id") not in resolved_sos
+    ]
+    if not locations:
+        return None
+    return max(locations, key=lambda record: record["created_at"])["data"]
+
+
 def send_sos_text(sos_id, body):
     """Text the SOS number through Twilio. Runs on its own thread, as retries can take minutes."""
-    if not all((TWILIO_ACCOUNT_SID, TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET, TWILIO_FROM_NUMBER)):
+    if not is_twilio_ready():
         app.logger.warning("SOS text not sent: add the TWILIO settings to NUSHack/.env.")
         return
 
@@ -564,12 +600,7 @@ def send_sos_text(sos_id, body):
             return
 
         try:
-            response = httpx.post(
-                f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json",
-                auth=(TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET),
-                data={"To": phone, "From": TWILIO_FROM_NUMBER, "Body": body},
-                timeout=10,
-            )
+            response = post_to_twilio("Messages", phone, {"Body": body})
         except httpx.HTTPError as error:
             app.logger.warning("SOS text failed, trying again: %s", error)
             continue
@@ -967,10 +998,47 @@ def add_sos_location(sos_id):
         return jsonify(error=error), 400
     # A new record, not an edit, so this works offline and always reaches Supabase.
     record = save_new_record({"type": "sos_location", "sos_id": sos_id, **position}, user)
-    accuracy = "" if position["accuracy"] is None else f" (within about {position['accuracy']} m)"
-    link = f"https://www.google.com/maps?q={position['latitude']},{position['longitude']}"
-    start_sos_text(sos_id, f"SOS from {user['name']}. Location: {link}{accuracy}")
+    start_sos_text(sos_id, f"SOS from {user['name']}. {describe_sos_location(position)}")
     return jsonify(record), 201
+
+
+@app.route("/api/sos/contact/<method>", methods=["POST"])
+def contact_sos_number(method):
+    """Call or text the SOS number for a computer, which can't dial by itself.
+
+    Open to anyone logged in without an open SOS, so it still works if sending the SOS failed.
+    The wording is built here, so a request can't send anything else at this account's cost.
+    """
+    if method not in ("call", "text"):
+        return jsonify(error="Choose call or text."), 404
+    if not is_twilio_ready():
+        return jsonify(error="Calling and texting from a computer aren't set up yet. Use a phone."), 503
+
+    user = session["user"]
+    with data_lock:
+        records = load_records()
+    phone = re.sub(r"[ ()-]", "", find_sos_phone(records))
+    if not phone.startswith("+"):
+        return jsonify(error="The SOS number needs a country code, such as +65. Use a phone."), 400
+
+    location = find_own_sos_location(records, user["id"])
+    if method == "call":
+        where = " Check SecuriLock for their location." if location else ""
+        speech = escape(f"This is an SOS alert from SecuriLock. {user['name']} needs help.{where}")
+        fields = {"Twiml": f'<Response><Say loop="3">{speech}</Say></Response>'}
+    else:
+        where = f" {describe_sos_location(location)}" if location else ""
+        fields = {"Body": f"SOS from {user['name']}. They need help.{where}"}
+
+    try:
+        response = post_to_twilio("Calls" if method == "call" else "Messages", phone, fields)
+    except httpx.HTTPError as error:
+        app.logger.warning("SOS %s failed: %s", method, error)
+        return jsonify(error="Can't reach Twilio. Check your connection or use a phone."), 503
+    if not response.is_success:
+        app.logger.error("SOS %s rejected by Twilio: %s %s", method, response.status_code, response.text)
+        return jsonify(error=f"Twilio refused this (error {response.status_code}). Use a phone."), 502
+    return jsonify(started=True), 201
 
 
 @app.route("/api/notices/<notice_id>", methods=["DELETE"])
