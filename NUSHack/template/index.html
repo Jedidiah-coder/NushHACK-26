@@ -224,6 +224,10 @@
       </div>
       <div class="map-levels" id="map-levels" role="group" aria-label="Levels"></div>
       <ul class="map-legend" id="map-legend" aria-label="Rooms on this level by status"></ul>
+      <div class="map-clash" id="map-layout-clash" role="status" hidden>
+        <p id="map-layout-clash-text"></p>
+        <div class="sos-actions" id="map-layout-clash-actions"></div>
+      </div>
       <div class="map-scroll">
         <div class="map-floor" id="map-floor"></div>
       </div>
@@ -232,6 +236,7 @@
 
       <div class="map-room-panel" id="map-room-panel" hidden>
         <h3 id="map-room-title"></h3>
+        <p class="map-clash" id="map-room-clash" hidden></p>
         <div class="map-status-buttons" id="map-status-buttons" role="group" aria-label="Room status"></div>
         <p class="record-meta" id="map-room-meta"></p>
         <button id="map-room-close" type="button">Close</button>

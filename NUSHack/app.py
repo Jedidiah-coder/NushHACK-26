@@ -55,6 +55,7 @@ MIN_MAP_ROOM_HEIGHT = 2
 MAX_MAP_LEVELS = 20
 MAX_MAP_ROOMS_PER_LEVEL = 60
 MAX_MAP_NAME_LENGTH = 40
+MAX_MAP_BASED_ON = 50
 MAX_SOS_LOCATION_ACCURACY_METRES = 1000000
 MAX_PULLED_RECORDS = 1000
 MAX_LISTED_USERS = 1000
@@ -333,8 +334,29 @@ def is_valid_map_room_shape(room):
     )
 
 
+def prepare_based_on(data):
+    """Check which versions a map change was made from. Returns extra record data, or None if invalid.
+
+    The browser compares these to spot people changing the same thing without seeing each other's
+    change, which device clocks can't show reliably.
+    """
+    based_on = data.get("based_on")
+    if based_on is None:
+        return {}
+    if (
+        not isinstance(based_on, list)
+        or len(based_on) > MAX_MAP_BASED_ON
+        or not all(isinstance(item, str) and re.fullmatch(MAP_ID_PATTERN, item) for item in based_on)
+    ):
+        return None
+    return {"based_on": based_on}
+
+
 def prepare_map_layout(data):
     """Check a redesigned map. Returns (record data, error message)."""
+    based_on = prepare_based_on(data)
+    if based_on is None:
+        return None, "This map change isn't valid."
     levels = data.get("levels")
     if not isinstance(levels, list) or not 1 <= len(levels) <= MAX_MAP_LEVELS:
         return None, f"Maps need 1 to {MAX_MAP_LEVELS} levels."
@@ -366,7 +388,7 @@ def prepare_map_layout(data):
                 {"id": room["id"], "name": room_name, **{key: room[key] for key in "xywh"}}
             )
         prepared_levels.append({"id": level["id"], "name": level_name, "rooms": prepared_rooms})
-    return {"type": "map_layout", "levels": prepared_levels}, None
+    return {"type": "map_layout", "levels": prepared_levels, **based_on}, None
 
 
 def prepare_record(data, user):
@@ -385,7 +407,10 @@ def prepare_record(data, user):
         status = data.get("status")
         if status not in MAP_STATUSES:
             return None, "Choose a valid status."
-        return {"type": "map_status", "room_id": room_id, "status": status}, None
+        based_on = prepare_based_on(data)
+        if based_on is None:
+            return None, "This map change isn't valid."
+        return {"type": "map_status", "room_id": room_id, "status": status, **based_on}, None
 
     if kind == "checklist_template":
         name = clean_text(data.get("name"))
@@ -963,9 +988,16 @@ def create_record():
 
 
 @app.route("/api/reset-data", methods=["POST"])
+@admin_only
 def reset_data():
     # Only clears this computer's data.json. Nothing is deleted from Supabase.
     with data_lock:
+        pending = sum(not record["synced"] for record in load_records())
+        # These exist nowhere else, so erasing them would lose someone's work for good.
+        if pending:
+            return jsonify(
+                error=f"{pending} record(s) haven't uploaded yet. Reconnect so they can upload first."
+            ), 409
         save_store([])
     return jsonify(reset=True)
 

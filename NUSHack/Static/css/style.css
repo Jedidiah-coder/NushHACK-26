@@ -1076,6 +1076,26 @@ ul {
   outline-offset: -4px;
 }
 
+.map-room[data-clash="true"] {
+  border-color: var(--status-text);
+  border-style: dashed;
+}
+
+.map-clash,
+.map-room-panel .map-clash {
+  max-width: 60rem;
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--map-unchecked);
+  border-left-width: 4px;
+  border-radius: 6px;
+  color: var(--text);
+}
+
+.map-clash p {
+  margin: 0 0 0.5rem;
+}
+
 .map-floor[data-editing="true"] .map-room {
   cursor: move;
   /* Lets a finger drag the room instead of scrolling the page. */

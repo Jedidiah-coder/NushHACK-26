@@ -176,6 +176,8 @@ let ownSosLocation = null;
 let mapLevels = DEFAULT_MAP_LEVELS;
 let mapLayoutId = null;
 let mapStatuses = new Map();
+let mapStatusHeads = new Map();
+let mapLayoutHeads = [];
 let mapLevelId = null;
 let mapSelectedRoomId = null;
 // A private copy while redesigning, so nobody sees the map until it's saved.
@@ -1255,8 +1257,8 @@ async function refreshUsers() {
 function showStatus(state, label, pending) {
   statusElement.dataset.state = state;
   statusText.textContent = pending > 0 ? `${label} · ${pending} pending` : label;
-  // Factory reset is only offered offline.
-  dataReset.hidden = state !== "offline";
+  // Factory reset is only offered to admins, and only offline.
+  dataReset.hidden = state !== "offline" || !currentUserIsAdmin;
   if (dataReset.hidden) {
     resetResult.textContent = "";
   }
@@ -1510,19 +1512,18 @@ checklistForm.addEventListener("submit", async (event) => {
 document.getElementById("reset-data").addEventListener("click", async () => {
   resetResult.textContent = "";
 
-  let lossWarning = "Anything not yet uploaded will be permanently lost.";
   try {
     const { pending } = await requestJson("/api/status");
-    lossWarning =
-      pending > 0
-        ? `${pending} record(s) not yet uploaded will be permanently lost.`
-        : "No records are waiting to upload.";
+    if (pending > 0) {
+      resetResult.textContent = `${pending} record(s) haven't uploaded yet, so nothing was erased. Reconnect so they can upload first.`;
+      return;
+    }
   } catch (error) {
     console.warn(error);
   }
 
   const confirmed = window.confirm(
-    `Factory reset your data?\n\nThis erases the saved data file on this computer. ${lossWarning}\n\nRecords already in Supabase are not deleted and will download again when SecuriLock is online.`
+    "Factory reset your data?\n\nThis erases the saved data file on this computer.\n\nRecords already in Supabase are not deleted and will download again when SecuriLock is online."
   );
   if (!confirmed) {
     return;
@@ -1535,7 +1536,7 @@ document.getElementById("reset-data").addEventListener("click", async () => {
     await Promise.all([refreshRecords(), refreshStatus(), refreshUsers()]);
   } catch (error) {
     console.warn(error);
-    resetResult.textContent = "Couldn't reset your data. Please try again.";
+    resetResult.textContent = error.userMessage ?? "Couldn't reset your data. Please try again.";
   }
 });
 
@@ -1852,17 +1853,39 @@ checklistEditor.addEventListener("submit", async (event) => {
   }
 });
 
+// Returns the versions nobody has built on yet, oldest first. More than one means people changed
+// the same thing without seeing each other's change, such as while one of them was offline.
+function findLatestVersions(records) {
+  const replaced = new Set();
+  records.forEach((record, index) => {
+    // Records from before based_on existed are taken to follow the one before them.
+    const parents = record.data.based_on ?? (index > 0 ? [records[index - 1].id] : []);
+    parents.forEach((id) => replaced.add(id));
+  });
+  return records.filter((record) => !replaced.has(record.id));
+}
+
 function updateMap(records) {
   if (!mapFloor) {
     return;
   }
-  // Records are sorted oldest first, so the last layout and each room's last status are current.
-  const layout = records.filter((r) => r.data.type === "map_layout").at(-1);
+  mapLayoutHeads = findLatestVersions(records.filter((r) => r.data.type === "map_layout"));
+  const layout = mapLayoutHeads.at(-1);
   mapLevels = layout?.data.levels ?? DEFAULT_MAP_LEVELS;
   mapLayoutId = layout?.id ?? null;
-  mapStatuses = new Map(
-    records.filter((r) => r.data.type === "map_status").map((r) => [r.data.room_id, r])
-  );
+
+  const recordsByRoom = new Map();
+  for (const record of records.filter((r) => r.data.type === "map_status")) {
+    recordsByRoom.set(record.data.room_id, [...(recordsByRoom.get(record.data.room_id) ?? []), record]);
+  }
+  mapStatusHeads = new Map();
+  mapStatuses = new Map();
+  for (const [roomId, roomRecords] of recordsByRoom) {
+    const heads = findLatestVersions(roomRecords);
+    mapStatusHeads.set(roomId, heads);
+    // A warning that clashed with another update stands until someone has seen both.
+    mapStatuses.set(roomId, heads.findLast((r) => r.data.status === "dangerous") ?? heads.at(-1));
+  }
   // Waits while redesigning, because rebuilding the rooms would interrupt a drag.
   if (!mapDraft) {
     renderMap();
@@ -1873,6 +1896,15 @@ function getMapRoomStatus(roomId) {
   return mapStatuses.get(roomId)?.data.status ?? "unchecked";
 }
 
+function hasMapRoomClash(roomId) {
+  const heads = mapStatusHeads.get(roomId) ?? [];
+  return new Set(heads.map((record) => record.data.status)).size > 1;
+}
+
+function listIds(records) {
+  return records.map((record) => record.id);
+}
+
 function getMapLevel() {
   const levels = mapDraft ?? mapLevels;
   return levels.find((level) => level.id === mapLevelId) ?? levels[0];
@@ -1880,6 +1912,10 @@ function getMapLevel() {
 
 function countDangerousRooms(level) {
   return level.rooms.filter((room) => getMapRoomStatus(room.id) === "dangerous").length;
+}
+
+function countClashingRooms(level) {
+  return level.rooms.filter((room) => hasMapRoomClash(room.id)).length;
 }
 
 function placeMapRoom(element, room) {
@@ -1987,7 +2023,10 @@ function createMapRoom(room) {
   element.dataset.roomId = room.id;
   element.dataset.mapFocus = `room-${room.id}`;
   element.title = room.name;
-  element.setAttribute("aria-label", `${room.name}: ${MAP_STATUSES[status]}`);
+  const clash = !mapDraft && hasMapRoomClash(room.id);
+  element.dataset.clash = String(clash);
+  const statusLabel = clash ? `${MAP_STATUSES[status]} · Review` : MAP_STATUSES[status];
+  element.setAttribute("aria-label", `${room.name}: ${statusLabel}`);
   element.setAttribute("aria-pressed", String(room.id === mapSelectedRoomId));
   placeMapRoom(element, room);
 
@@ -1996,7 +2035,7 @@ function createMapRoom(room) {
   name.textContent = room.name;
   const label = document.createElement("span");
   label.className = "map-room-status";
-  label.textContent = MAP_STATUSES[status];
+  label.textContent = statusLabel;
   element.append(name, label);
 
   if (mapDraft) {
@@ -2025,8 +2064,13 @@ function createMapLevelButton(level) {
   button.setAttribute("aria-pressed", String(level.id === mapLevelId));
   // A danger on another level must be visible without opening that level.
   const dangerous = mapDraft ? 0 : countDangerousRooms(level);
+  const clashing = mapDraft ? 0 : countClashingRooms(level);
   button.dataset.dangerous = String(dangerous > 0);
-  button.textContent = dangerous > 0 ? `${level.name} · ${dangerous} dangerous` : level.name;
+  button.textContent = [
+    level.name,
+    ...(dangerous > 0 ? [`${dangerous} dangerous`] : []),
+    ...(clashing > 0 ? [`${clashing} to review`] : []),
+  ].join(" · ");
   button.addEventListener("click", () => {
     mapLevelId = level.id;
     mapSelectedRoomId = null;
@@ -2053,6 +2097,21 @@ function renderMapLegend(level) {
   );
 }
 
+function describeMapRoomClash(roomId, current) {
+  const updates = mapStatusHeads
+    .get(roomId)
+    .map(
+      (record) =>
+        `${record.data.sender_name} marked it ${MAP_STATUSES[record.data.status]} (${formatTime(record.created_at)})`
+    )
+    .join(" and ");
+  const showing =
+    current === "dangerous"
+      ? "It stays Dangerous"
+      : `It shows ${MAP_STATUSES[current]}, the latest update,`;
+  return `These updates clashed: ${updates}, without seeing each other's update. ${showing} until someone checks the room and chooses a status.`;
+}
+
 function renderMapRoomPanel(room) {
   mapRoomPanel.hidden = !room;
   if (!room) {
@@ -2060,6 +2119,11 @@ function renderMapRoomPanel(room) {
   }
   document.getElementById("map-room-title").textContent = room.name;
   const current = getMapRoomStatus(room.id);
+  const clashText = document.getElementById("map-room-clash");
+  if (clashText) {
+    clashText.hidden = !hasMapRoomClash(room.id);
+    clashText.textContent = clashText.hidden ? "" : describeMapRoomClash(room.id, current);
+  }
   mapStatusButtons.replaceChildren(
     ...Object.entries(MAP_STATUSES).map(([status, label]) => {
       const button = document.createElement("button");
@@ -2076,6 +2140,46 @@ function renderMapRoomPanel(room) {
   document.getElementById("map-room-meta").textContent = record
     ? `Marked ${MAP_STATUSES[current]} by ${record.data.sender_name} · ${formatTime(record.created_at)} · ${record.synced ? "Synced" : "Pending upload"}`
     : "Nobody has checked this room yet.";
+}
+
+async function settleMapLayout(levels) {
+  mapError.textContent = "";
+  try {
+    await saveRecord({ type: "map_layout", levels, based_on: listIds(mapLayoutHeads) });
+  } catch (error) {
+    console.warn(error);
+    mapError.textContent = error.userMessage ?? "Couldn't save the map. Please try again.";
+  }
+}
+
+function renderMapLayoutClash(editing) {
+  const notice = document.getElementById("map-layout-clash");
+  if (!notice) {
+    return;
+  }
+  const shown = mapLayoutHeads.at(-1);
+  const others = mapLayoutHeads.filter(
+    (record) => JSON.stringify(record.data.levels) !== JSON.stringify(shown.data.levels)
+  );
+  notice.hidden = editing || others.length === 0;
+  if (notice.hidden) {
+    return;
+  }
+  const describe = (record) => `${record.data.sender_name}'s version (${formatTime(record.created_at)})`;
+  document.getElementById("map-layout-clash-text").textContent =
+    `Map redesigns clashed. This is ${describe(shown)}. ${others.map(describe).join(" and ")} isn't showing. Choose which one to keep.`;
+
+  const createButton = (label, record) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", () => settleMapLayout(record.data.levels));
+    return button;
+  };
+  document.getElementById("map-layout-clash-actions").replaceChildren(
+    createButton("Keep this map", shown),
+    ...others.map((record) => createButton(`Use ${record.data.sender_name}'s version`, record))
+  );
 }
 
 function setInputValue(input, value) {
@@ -2114,7 +2218,8 @@ function renderMap() {
     levels,
     mapLevelId,
     mapSelectedRoomId,
-    [...mapStatuses.values()].map((record) => [record.id, record.synced]),
+    [...mapStatusHeads.values()].map((heads) => heads.map((record) => [record.id, record.synced])),
+    listIds(mapLayoutHeads),
   ]);
   if (snapshot === renderedMap) {
     return;
@@ -2130,6 +2235,7 @@ function renderMap() {
   mapLegend.hidden = editing;
   mapEditor.hidden = !editing;
   renderMapLegend(level);
+  renderMapLayoutClash(editing);
   renderMapRoomPanel(editing ? null : room);
   if (editing) {
     renderMapEditor(level, room);
@@ -2140,12 +2246,18 @@ function renderMap() {
 }
 
 async function setMapRoomStatus(roomId, status) {
-  if (getMapRoomStatus(roomId) === status) {
+  // Choosing the status already showing still settles a clash.
+  if (getMapRoomStatus(roomId) === status && !hasMapRoomClash(roomId)) {
     return;
   }
   mapError.textContent = "";
   try {
-    await saveRecord({ type: "map_status", room_id: roomId, status });
+    await saveRecord({
+      type: "map_status",
+      room_id: roomId,
+      status,
+      based_on: listIds(mapStatusHeads.get(roomId) ?? []),
+    });
   } catch (error) {
     console.warn(error);
     mapError.textContent = error.userMessage ?? "Couldn't save the room's status. Please try again.";
@@ -2311,7 +2423,7 @@ if (mapFloor) {
     }
     mapError.textContent = "";
     try {
-      await saveRecord({ type: "map_layout", levels: mapDraft });
+      await saveRecord({ type: "map_layout", levels: mapDraft, based_on: listIds(mapLayoutHeads) });
       closeMapEditor();
     } catch (error) {
       console.warn(error);
