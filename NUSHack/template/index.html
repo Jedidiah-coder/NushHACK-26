@@ -205,6 +205,7 @@
         <div id="checklist-items"></div>
         <p class="form-error" id="checklist-error" role="alert"></p>
         <button type="submit">Submit checklist</button>
+        <p id="checklist-result" role="status"></p>
       </form>
       <form id="checklist-editor" hidden>
         <label for="editor-name">Checklist name</label>
@@ -220,6 +221,14 @@
           <button id="editor-cancel" type="button">Cancel</button>
         </div>
       </form>
+      <h2>Follow-ups</h2>
+      <p class="form-error" id="followup-error" role="alert"></p>
+      <ul class="record-list" id="followup-list"></ul>
+      <p id="followup-empty">No open follow-ups. A failed check adds one here.</p>
+      <details id="followup-fixed" hidden>
+        <summary id="followup-fixed-summary"></summary>
+        <ul class="record-list" id="followup-fixed-list"></ul>
+      </details>
       <h2>Recent inspections</h2>
       <ul class="record-list" id="inspection-list"></ul>
       <p id="inspection-empty">No inspections yet.</p>

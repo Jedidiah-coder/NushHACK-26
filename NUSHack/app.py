@@ -46,6 +46,9 @@ DEFAULT_NOTICE_TAG = "general"
 MAX_CHECKLIST_NAME_LENGTH = 100
 MAX_CHECKLIST_TASK_LENGTH = 200
 MAX_CHECKLIST_TASKS = 50
+MAX_CHECKLIST_NOTE_LENGTH = 500
+CHECKLIST_RESULTS = ("Pass", "Fail", "N/A")
+FOLLOW_UP_STATUSES = ("open", "in_progress", "fixed")
 MAP_STATUSES = ("unchecked", "safe", "na", "dangerous")
 MAP_ID_PATTERN = r"[A-Za-z0-9_-]{1,64}"
 # These match the map code in script.js.
@@ -414,11 +417,70 @@ def prepare_map_layout(data):
     return {"type": "map_layout", "levels": prepared_levels, **based_on}, None
 
 
+def prepare_checklist(data):
+    """Check a finished checklist. Follow-ups come from its results, so they must be well formed."""
+    name = clean_text(data.get("name"))
+    if not name or len(name) > MAX_CHECKLIST_NAME_LENGTH:
+        return None, f"Checklist names must be 1 to {MAX_CHECKLIST_NAME_LENGTH} characters."
+    results = data.get("results")
+    if not isinstance(results, list) or not 1 <= len(results) <= MAX_CHECKLIST_TASKS:
+        return None, f"Checklists need 1 to {MAX_CHECKLIST_TASKS} results."
+
+    prepared_results = []
+    for entry in results:
+        if not isinstance(entry, dict) or entry.get("result") not in CHECKLIST_RESULTS:
+            return None, "Choose a result for every task."
+        item = clean_text(entry.get("item"))
+        note = clean_text(entry.get("note"))
+        if not item or len(item) > MAX_CHECKLIST_TASK_LENGTH:
+            return None, f"Tasks must be 1 to {MAX_CHECKLIST_TASK_LENGTH} characters."
+        if len(note) > MAX_CHECKLIST_NOTE_LENGTH:
+            return None, f"Notes can be up to {MAX_CHECKLIST_NOTE_LENGTH} characters."
+        if entry["result"] == "Fail" and not note:
+            return None, f"Say what's wrong with: {item}"
+        prepared_results.append({"item": item, "result": entry["result"], "note": note})
+    return {"type": "checklist", "name": name, "results": prepared_results}, None
+
+
+def prepare_follow_up_status(data):
+    """Check a change to a follow-up, which is a failed result in a finished checklist."""
+    status = data.get("status")
+    if status not in FOLLOW_UP_STATUSES:
+        return None, "Choose a valid status."
+    based_on = prepare_based_on(data)
+    if based_on is None:
+        return None, "This change isn't valid."
+
+    checklist_id, item_index = data.get("checklist_id"), data.get("item_index")
+    with data_lock:
+        checklist = find_record(load_records(), checklist_id, "checklist")
+    results = checklist["data"].get("results") if checklist else None
+    # Exactly int, because Python also counts True and False as ints.
+    if (
+        not isinstance(results, list)
+        or type(item_index) is not int
+        or not 0 <= item_index < len(results)
+        or not isinstance(results[item_index], dict)
+        or results[item_index].get("result") != "Fail"
+    ):
+        return None, "Follow-up not found."
+    return {
+        "type": "followup_status",
+        "checklist_id": checklist_id,
+        "item_index": item_index,
+        "status": status,
+        **based_on,
+    }, None
+
+
 def prepare_record(data, user):
     """Check a record from the browser. Returns (record data, error message)."""
     kind = data.get("type")
     if kind == "checklist":
-        return data, None
+        return prepare_checklist(data)
+
+    if kind == "followup_status":
+        return prepare_follow_up_status(data)
 
     if kind == "map_layout":
         return prepare_map_layout(data)
@@ -760,7 +822,14 @@ def is_visible(record, user_id, taken_down, deleted_messages, resolved_sos):
         )
     if kind == "notice":
         return record["id"] not in taken_down
-    return kind in ("checklist", "checklist_template", "sos_phone", "map_layout", "map_status")
+    return kind in (
+        "checklist",
+        "checklist_template",
+        "followup_status",
+        "sos_phone",
+        "map_layout",
+        "map_status",
+    )
 
 
 class AccountError(Exception):

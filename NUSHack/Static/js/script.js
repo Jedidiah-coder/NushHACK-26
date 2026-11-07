@@ -9,6 +9,9 @@ const DEFAULT_CHECKLIST = {
   ],
 };
 const RESULTS = ["Pass", "Fail", "N/A"];
+// Most urgent first. If updates clash, the most urgent one stands until someone has seen both.
+const FOLLOW_UP_STATUSES = { open: "Open", in_progress: "In progress", fixed: "Fixed" };
+const FOLLOW_UP_ACTIONS = { open: "Reopen", in_progress: "In progress", fixed: "Mark fixed" };
 const MAX_CHECKLIST_TASKS = 50;
 const STATUS_CHECK_MS = 30000;
 const RECORD_CHECK_MS = 5000;
@@ -157,6 +160,7 @@ let renderedMessages = "";
 let renderedUsers = "";
 let currentChecklist = DEFAULT_CHECKLIST;
 let renderedChecklist = "";
+let renderedFollowUps = "";
 let checklistHeads = [];
 let checklistDraftBase = [];
 let sosPhoneHeads = [];
@@ -421,9 +425,154 @@ function renderMessages() {
   }
 }
 
+// Records from before the server checked results, or changed directly in Supabase, may be malformed.
+function readChecklistResults(record) {
+  return Array.isArray(record.data.results) ? record.data.results : [];
+}
+
+function findFollowUps(records) {
+  const statusesByFollowUp = new Map();
+  for (const record of records.filter((r) => r.data.type === "followup_status")) {
+    const key = `${record.data.checklist_id}:${record.data.item_index}`;
+    statusesByFollowUp.set(key, [...(statusesByFollowUp.get(key) ?? []), record]);
+  }
+
+  const followUps = [];
+  for (const checklist of records.filter((r) => r.data.type === "checklist")) {
+    readChecklistResults(checklist).forEach((entry, index) => {
+      if (entry?.result !== "Fail") {
+        return;
+      }
+      const heads = findLatestVersions(statusesByFollowUp.get(`${checklist.id}:${index}`) ?? []);
+      const current =
+        Object.keys(FOLLOW_UP_STATUSES)
+          .map((status) => heads.findLast((record) => record.data.status === status))
+          .find(Boolean) ?? null;
+      followUps.push({
+        checklist,
+        index,
+        entry,
+        heads,
+        current,
+        status: current?.data.status ?? "open",
+        clash: new Set(heads.map((record) => record.data.status)).size > 1,
+      });
+    });
+  }
+  // Newest failure first.
+  return followUps.reverse();
+}
+
+async function setFollowUpStatus(followUp, status) {
+  const followUpError = document.getElementById("followup-error");
+  followUpError.textContent = "";
+  try {
+    await saveRecord({
+      type: "followup_status",
+      checklist_id: followUp.checklist.id,
+      item_index: followUp.index,
+      status,
+      based_on: listIds(followUp.heads),
+    });
+  } catch (error) {
+    console.warn(error);
+    followUpError.textContent = error.userMessage ?? "Couldn't update the follow-up. Please try again.";
+  }
+}
+
+function describeFollowUpClash(followUp) {
+  const updates = followUp.heads
+    .map(
+      (record) =>
+        `${record.data.sender_name} marked it ${FOLLOW_UP_STATUSES[record.data.status]} (${formatTime(record.created_at)})`
+    )
+    .join(" and ");
+  return `These updates clashed: ${updates}, without seeing each other's update. It stays ${FOLLOW_UP_STATUSES[followUp.status]} until someone chooses a status.`;
+}
+
+function createFollowUpItem(followUp) {
+  const { checklist, entry, status, current, clash } = followUp;
+  const item = createRecordItem(entry.item, checklist, [entry.note]);
+  item.dataset.status = status;
+  const source = document.createElement("p");
+  source.className = "record-meta";
+  source.textContent = `From ${checklist.data.name}`;
+  item.querySelector(".record-meta").before(source);
+
+  const label = document.createElement("span");
+  label.className = "followup-status";
+  label.dataset.status = status;
+  label.textContent = clash ? `${FOLLOW_UP_STATUSES[status]} · Review` : FOLLOW_UP_STATUSES[status];
+  item.prepend(label);
+
+  if (current) {
+    const update = document.createElement("p");
+    update.className = "record-meta";
+    update.textContent = `${FOLLOW_UP_STATUSES[status]}: ${current.data.sender_name} · ${formatTime(current.created_at)} · ${current.synced ? "Synced" : "Pending upload"}`;
+    item.append(update);
+  }
+  if (clash) {
+    const notice = document.createElement("p");
+    notice.className = "map-clash";
+    notice.textContent = describeFollowUpClash(followUp);
+    item.append(notice);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "sos-actions";
+  for (const [nextStatus, actionLabel] of Object.entries(FOLLOW_UP_ACTIONS)) {
+    // Choosing the status already showing still settles a clash.
+    if (nextStatus !== status || clash) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = actionLabel;
+      button.addEventListener("click", () => setFollowUpStatus(followUp, nextStatus));
+      actions.append(button);
+    }
+  }
+  item.append(actions);
+  return item;
+}
+
+function renderFollowUps(records) {
+  const followUpList = document.getElementById("followup-list");
+  if (!followUpList) {
+    return;
+  }
+  const followUps = findFollowUps(records);
+  const active = followUps.filter((followUp) => followUp.status !== "fixed");
+  const fixed = followUps.filter((followUp) => followUp.status === "fixed");
+
+  const tab = document.getElementById("tab-checklist");
+  const tabLabel = active.length > 0 ? `Checklist · ${active.length} to fix` : "Checklist";
+  if (tab.textContent !== tabLabel) {
+    tab.textContent = tabLabel;
+  }
+
+  // Rebuilding only on a real change keeps focus and the buttons in place during refreshes.
+  const snapshot = JSON.stringify(
+    followUps.map((followUp) => [
+      followUp.checklist.id,
+      followUp.index,
+      followUp.checklist.synced,
+      followUp.status,
+      followUp.heads.map((record) => [record.id, record.synced]),
+    ])
+  );
+  if (snapshot === renderedFollowUps) {
+    return;
+  }
+  renderedFollowUps = snapshot;
+  followUpList.replaceChildren(...active.map(createFollowUpItem));
+  document.getElementById("followup-empty").hidden = active.length > 0;
+  document.getElementById("followup-fixed").hidden = fixed.length === 0;
+  document.getElementById("followup-fixed-summary").textContent = `Fixed (${fixed.length})`;
+  document.getElementById("followup-fixed-list").replaceChildren(...fixed.map(createFollowUpItem));
+}
+
 function describeInspection(record) {
-  const results = record.data.results;
-  const failures = results.filter((entry) => entry.result === "Fail");
+  const results = readChecklistResults(record);
+  const failures = results.filter((entry) => entry?.result === "Fail");
   const details = failures.map((entry) => `Failed: ${entry.item}: ${entry.note}`);
   const summary = `${results.length - failures.length} of ${results.length} OK`;
   return createRecordItem(`${record.data.name}: ${summary}`, record, details);
@@ -992,6 +1141,12 @@ function announceRecord(record) {
     );
     return;
   }
+  if (record.data.type === "checklist") {
+    showNotification(`Failed check from ${sender}`, "A new follow-up needs attention.", record.id, () =>
+      selectTab(document.getElementById("tab-checklist"))
+    );
+    return;
+  }
   const text = record.data.text;
   const preview =
     text.length > NOTICE_PREVIEW_LENGTH ? `${text.slice(0, NOTICE_PREVIEW_LENGTH)}...` : text;
@@ -1004,6 +1159,9 @@ function isRecordOnScreen(record) {
   if (document.hidden || !document.hasFocus()) {
     return false;
   }
+  if (record.data.type === "checklist") {
+    return !document.getElementById("panel-checklist").hidden;
+  }
   return record.data.type === "notice"
     ? !homePanel.hidden
     : !messagePanel.hidden && recipientSelect.value === record.data.sender_id;
@@ -1015,6 +1173,8 @@ function notifyAboutNewRecords(records) {
       record.data.sender_id !== currentUserId &&
       (record.data.type === "notice" ||
         record.data.type === "sos" ||
+        (record.data.type === "checklist" &&
+          readChecklistResults(record).some((entry) => entry?.result === "Fail")) ||
         (record.data.type === "message" && record.data.recipient_id === currentUserId))
   );
 
@@ -1051,6 +1211,7 @@ async function refreshRecords() {
 
   showChecklist(checklistHeads.at(-1)?.data ?? DEFAULT_CHECKLIST);
   renderChecklistClash();
+  renderFollowUps(records);
   updateMap(records);
   sosPhoneHeads = findLatestVersions(records.filter((r) => r.data.type === "sos_phone"));
   // If a number clashed with someone removing it, keeping a number is the safer mistake.
@@ -1548,6 +1709,13 @@ messageForm.addEventListener("submit", async (event) => {
   }
 });
 
+checklistForm.addEventListener("input", () => {
+  const checklistResult = document.getElementById("checklist-result");
+  if (checklistResult) {
+    checklistResult.textContent = "";
+  }
+});
+
 checklistForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const formData = new FormData(checklistForm);
@@ -1557,13 +1725,22 @@ checklistForm.addEventListener("submit", async (event) => {
     note: (formData.get(`note-${index}`) ?? "").trim(),
   }));
   checklistError.textContent = "";
+  const checklistResult = document.getElementById("checklist-result");
   try {
     await saveRecord({ type: "checklist", name: currentChecklist.name, results });
     checklistForm.reset();
     hideChecklistNotes();
+    // Follow-ups appear below the form, which can be off screen.
+    const failures = results.filter((entry) => entry.result === "Fail").length;
+    if (checklistResult) {
+      checklistResult.textContent =
+        failures > 0
+          ? `Checklist saved. ${failures} follow-up${failures === 1 ? "" : "s"} added below.`
+          : "Checklist saved.";
+    }
   } catch (error) {
     console.warn(error);
-    checklistError.textContent = "Couldn't save your checklist. Please try again.";
+    checklistError.textContent = error.userMessage ?? "Couldn't save your checklist. Please try again.";
   }
 });
 

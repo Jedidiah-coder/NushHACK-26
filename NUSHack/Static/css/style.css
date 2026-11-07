@@ -1096,6 +1096,35 @@ ul {
   margin: 0 0 0.5rem;
 }
 
+.followup-status {
+  display: inline-block;
+  margin-bottom: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 6px;
+  background: var(--map-dangerous);
+  color: var(--map-dangerous-text);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.followup-status[data-status="in_progress"] {
+  background: var(--map-unchecked);
+  color: var(--map-status-text);
+}
+
+.followup-status[data-status="fixed"] {
+  background: var(--map-safe);
+  color: var(--map-status-text);
+}
+
+.record .map-clash {
+  margin: 0.5rem 0;
+}
+
+#followup-fixed {
+  margin-bottom: 1rem;
+}
+
 .map-floor[data-editing="true"] .map-room {
   cursor: move;
   /* Lets a finger drag the room instead of scrolling the page. */
