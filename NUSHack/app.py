@@ -1257,7 +1257,7 @@ def create_record():
     record = save_new_record(prepared, user)
     if prepared["type"] == "sos":
         reason = (
-            "No response to SecuriLock safety checks."
+            "No response to Security System safety checks."
             if prepared.get("automatic")
             else "They need help."
         )
@@ -1333,8 +1333,8 @@ def contact_sos_number(method):
 
     location = find_own_sos_location(records, user["id"])
     if method == "call":
-        where = " Check SecuriLock for their location." if location else ""
-        speech = escape(f"This is an SOS alert from SecuriLock. {user['name']} needs help.{where}")
+        where = " Check Security System for their location." if location else ""
+        speech = escape(f"This is an SOS alert from Security System. {user['name']} needs help.{where}")
         fields = {"Twiml": f'<Response><Say loop="3">{speech}</Say></Response>'}
     else:
         where = f" {describe_sos_location(location)}" if location else ""

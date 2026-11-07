@@ -37,7 +37,7 @@ const SAFETY_TICK_MS = 5000;
 const SAFETY_SLEEP_GAP_MS = 3 * 60 * 1000;
 const SAFETY_SOS_RETRY_MS = 30000;
 const SAFETY_ACTIVITY_SAVE_MS = 5000;
-const AUTOMATIC_SOS_REASON = "You didn't respond to 2 safety checks, so SecuriLock sent this for you. ";
+const AUTOMATIC_SOS_REASON = "You didn't respond to 2 safety checks, so Security System sent this for you. ";
 // Each try can take this long, because GPS is slow to start and often weak indoors.
 const SOS_LOCATION_TRY_MS = 10000;
 // Stops "Getting your location" staying up if nobody answers the browser's permission request.
@@ -796,12 +796,12 @@ function setUpSosContacts() {
   contactActions.hidden = !sosPhone;
   if (!sosPhone) {
     contactText.textContent =
-      "No emergency number is set up in SecuriLock. Call your control room or emergency services directly.";
+      "No emergency number is set up in Security System. Call your control room or emergency services directly.";
     return;
   }
   contactText.textContent = canDialFromDevice
     ? `Emergency number: ${sosPhone}. Call and Send SMS use this phone.`
-    : `Emergency number: ${sosPhone}. Call and Send SMS go through SecuriLock. The call plays a recorded alert, so you can't talk on it.`;
+    : `Emergency number: ${sosPhone}. Call and Send SMS go through Security System. The call plays a recorded alert, so you can't talk on it.`;
   const dialNumber = sosPhone.replace(/[ ()-]/g, "");
   const position = ownSosLocation?.position;
   const whereAmI = position ? ` My location: ${createMapLink(position)}` : "";
@@ -837,7 +837,7 @@ async function contactSosNumber(event, method) {
     );
   } catch (error) {
     console.warn(error);
-    setSosContactResult(error.userMessage || "Can't reach SecuriLock. Use a phone.");
+    setSosContactResult(error.userMessage || "Can't reach Security System. Use a phone.");
   } finally {
     sosContactBusy = false;
   }
@@ -862,12 +862,12 @@ function describeOwnSosLocation() {
   }
   const where = describePosition(position);
   if (status === "shared") {
-    return `Location shared: ${where}. Everyone with SecuriLock open can see it.`;
+    return `Location shared: ${where}. Everyone with Security System open can see it.`;
   }
   if (status === "pending") {
     return `Location saved on this device: ${where}. It will be shared once you're back online.`;
   }
-  return `Your location: ${where}. It wasn't shared in SecuriLock, so read it out when you call or text.`;
+  return `Your location: ${where}. It wasn't shared in Security System, so read it out when you call or text.`;
 }
 
 function renderSosLocation() {
@@ -904,7 +904,7 @@ function renderSosPanel() {
   if (sosPanelView.name === "confirm") {
     showSosPanelContent(
       "Send an SOS alert?",
-      "Everyone with SecuriLock open will be alerted straight away and, if your browser allows it, will see your location.",
+      "Everyone with Security System open will be alerted straight away and, if your browser allows it, will see your location.",
       { confirming: true }
     );
     return;
@@ -913,8 +913,8 @@ function renderSosPanel() {
     showSosPanelContent(
       "SOS NOT sent",
       canDialFromDevice
-        ? "SecuriLock can't be reached and your alert was not saved. Call or text now, then press SOS to try again."
-        : "SecuriLock can't be reached and your alert was not saved. Use a phone to call or text now, as this computer needs internet to do it. Then press SOS to try again."
+        ? "Security System can't be reached and your alert was not saved. Call or text now, then press SOS to try again."
+        : "Security System can't be reached and your alert was not saved. Use a phone to call or text now, as this computer needs internet to do it. Then press SOS to try again."
     );
     return;
   }
@@ -926,12 +926,12 @@ function renderSosPanel() {
   } else if (record.synced) {
     showSosPanelContent(
       record.data.automatic ? "Automatic SOS sent" : "SOS sent",
-      `${record.data.automatic ? AUTOMATIC_SOS_REASON : ""}Anyone with SecuriLock open will see your alert, but this doesn't confirm someone has read it. If you're safe, press Mark resolved. If you're in immediate danger, call or text as well.`
+      `${record.data.automatic ? AUTOMATIC_SOS_REASON : ""}Anyone with Security System open will see your alert, but this doesn't confirm someone has read it. If you're safe, press Mark resolved. If you're in immediate danger, call or text as well.`
     );
   } else {
     showSosPanelContent(
       "SOS NOT sent yet: no data connection",
-      `${record.data.automatic ? AUTOMATIC_SOS_REASON : ""}Your alert is saved on this device and SecuriLock will keep trying to send it. ${
+      `${record.data.automatic ? AUTOMATIC_SOS_REASON : ""}Your alert is saved on this device and Security System will keep trying to send it. ${
         canDialFromDevice
           ? "Call or text now, as these may work without internet."
           : "Use a phone to call or text now, as this computer needs internet to do it."
@@ -1202,13 +1202,13 @@ function showSafetyCheck(level) {
 
   safetyCheckText.textContent =
     level < SAFETY_MISSED_CHECKS_FOR_SOS
-      ? "You've been inactive for a while. Press I'm OK, or SecuriLock will check again in 5 minutes and then send an SOS."
-      : "Last check. If you don't press I'm OK within 5 minutes, SecuriLock will send an SOS to everyone, with your location if this browser allows it.";
+      ? "You've been inactive for a while. Press I'm OK, or Security System will check again in 5 minutes and then send an SOS."
+      : "Last check. If you don't press I'm OK within 5 minutes, Security System will send an SOS to everyone, with your location if this browser allows it.";
   safetyCheck.scrollIntoView({ block: "nearest" });
   if (notificationsSupported && Notification.permission === "granted") {
     safetyNotification = showNotification(
       "Are you OK?",
-      "Open SecuriLock and press I'm OK.",
+      "Open Security System and press I'm OK.",
       "bits-safety-check",
       () => {},
       true
@@ -1299,7 +1299,7 @@ function setSettingsOpen(open) {
   settingsPanel.hidden = !open;
   settingsButton.setAttribute("aria-expanded", String(open));
   if (open) {
-    // The permission can be changed in the browser while SecuriLock is open.
+    // The permission can be changed in the browser while Security System is open.
     updateNotificationSettings();
   }
 }
@@ -1335,14 +1335,14 @@ function announceRecord(record) {
   const sender = record.data.sender_name ?? "Someone";
   if (record.data.type === "sos") {
     const body = record.data.automatic
-      ? "Automatic: no response to safety checks. Open SecuriLock now."
-      : "Open SecuriLock now.";
+      ? "Automatic: no response to safety checks. Open Security System now."
+      : "Open Security System now.";
     showNotification(`SOS from ${sender}`, body, record.id, () => {}, true);
     return;
   }
   if (record.data.type === "message") {
     // Message text stays out of the alert, so it can't show on a locked or shared screen.
-    showNotification(`New message from ${sender}`, "Open SecuriLock to read it.", record.id, () =>
+    showNotification(`New message from ${sender}`, "Open Security System to read it.", record.id, () =>
       openConversation(record.data.sender_id)
     );
     return;
@@ -1398,7 +1398,7 @@ function notifyAboutNewRecords(records) {
     (record) => record.data.type !== "sos" && !isRecordOnScreen(record)
   );
   if (toAnnounce.length > MAX_SEPARATE_NOTIFICATIONS) {
-    showNotification(`${toAnnounce.length} new updates`, "Open SecuriLock to see them.", "bits-summary", () => {});
+    showNotification(`${toAnnounce.length} new updates`, "Open Security System to see them.", "bits-summary", () => {});
     return;
   }
   toAnnounce.forEach(announceRecord);
@@ -1597,7 +1597,7 @@ function renderPeople(users) {
       ...createPeopleGroup("People", users, ""),
       Object.assign(document.createElement("p"), {
         className: "field-hint",
-        textContent: "You're offline, so SecuriLock can't check who else is online.",
+        textContent: "You're offline, so Security System can't check who else is online.",
       })
     );
     return;
@@ -1978,7 +1978,7 @@ document.getElementById("reset-data").addEventListener("click", async () => {
   }
 
   const confirmed = window.confirm(
-    "Factory reset your data?\n\nThis erases the saved data file on this computer. Everyone will need internet to log in on it again.\n\nRecords already in Supabase are not deleted and will download again when SecuriLock is online."
+    "Factory reset your data?\n\nThis erases the saved data file on this computer. Everyone will need internet to log in on it again.\n\nRecords already in Supabase are not deleted and will download again when Security System is online."
   );
   if (!confirmed) {
     return;
@@ -2052,7 +2052,7 @@ function createPasswordForm(account) {
 
 async function makeAccountAdmin(account) {
   const confirmed = window.confirm(
-    `Make ${account.name} an admin?\n\nThey'll be able to grant accounts, make other admins, see members' login emails and change members' passwords. This can't be undone in SecuriLock.`
+    `Make ${account.name} an admin?\n\nThey'll be able to grant accounts, make other admins, see members' login emails and change members' passwords. This can't be undone in Security System.`
   );
   if (!confirmed) {
     return;
@@ -2218,7 +2218,7 @@ async function requestNotifications() {
     return;
   }
   updateNotificationPrompt();
-  showNotification("Notifications are on", "SecuriLock will alert you here.", "bits-notifications-on", () => {});
+  showNotification("Notifications are on", "Security System will alert you here.", "bits-notifications-on", () => {});
 }
 
 notificationEnable.addEventListener("click", requestNotifications);

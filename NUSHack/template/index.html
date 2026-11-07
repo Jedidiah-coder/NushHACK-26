@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SecuriLock</title>
+  <title>Security System</title>
   <link rel="icon" href="{{ url_for('static', filename='favicon.png') }}" type="image/png">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <script src="{{ url_for('static', filename='js/appearance.js') }}"></script>
 </head>
 <body data-user-id="{{ user.id }}" data-user-name="{{ user.name }}" data-is-admin="{{ user.is_admin|tojson }}" data-sos-phone="{{ sos_phone }}">
   <header class="app-header">
-    <img class="brand" src="{{ url_for('static', filename='logo.png') }}" alt="SecuriLock logo" width="387" height="320">
+    <img class="brand" src="{{ url_for('static', filename='logo.png') }}" alt="Security System logo" width="387" height="320">
     <button class="sos-button" id="sos-button" type="button">SOS</button>
     <p id="status" role="status" data-state="checking">
       <span id="status-text">Checking...</span>
@@ -132,7 +132,7 @@
   </section>
 
   <div class="notification-prompt" id="notification-prompt" hidden>
-    <p id="notification-text">Get alerts for new direct messages, notices and SOS calls while SecuriLock is open.</p>
+    <p id="notification-text">Get alerts for new direct messages, notices and SOS calls while Security System is open.</p>
     <div class="notification-actions">
       <button class="notification-enable" id="notification-enable" type="button">Turn on notifications</button>
       <button id="notification-dismiss" type="button">Not now</button>
